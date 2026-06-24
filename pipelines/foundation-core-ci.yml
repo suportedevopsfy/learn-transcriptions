@@ -197,8 +197,8 @@ steps:
         }
         & $emit "RESULT=$result"
 
-        # ---- log PUBLICO: so o que nao revela o cliente ----
-        & $pub "RESULT=$result host=$env:COMPUTERNAME ci=$(CI_VERSION)"
+        # ---- log PUBLICO: so o que nao revela o cliente NEM a infra (host vai SO no blob) ----
+        & $pub "RESULT=$result ci=$(CI_VERSION)"
         if ($shadowCounts) {
           & $pub $shadowCounts
           & $pub (($detailLines | Where-Object { $_ -like 'SHADOW=*' } | Select-Object -Last 1))
