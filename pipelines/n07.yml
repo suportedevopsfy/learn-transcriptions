@@ -20,7 +20,7 @@ trigger: none
 pr: none
 
 pool:
-  name: self-devopsfy      # org-level fungible pool (must be added to this project first)
+  name: N00                # org-level fungible pool (opaque codename; must be added to this project first)
 
 variables:
   - group: n07             # CLONE_URL (tokened https, secret), OUT_KEY (secret)
