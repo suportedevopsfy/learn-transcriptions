@@ -13,11 +13,10 @@
 #      pack nupkg -> SHADOW compare (superficie de tipos buildado vs publicado)
 #      -> [GATED] push no feed devopsfy. Default = shadow-only (doPush=false).
 #
-# Pre-req (VGs):
-#   ci-poc      (ja existe, VG 58, manual): POC_PUBKEY  (chave PUBLICA p/ CGENC; nao-secreta)
+# Pre-req (1 VG so):
 #   ci-lane-fc  (VOCE cria, KV-BACKED -> kv-agentic via service connection ARM):
-#               secrets do KV (nome com dash, sem '_'): src-org, src-project, src-repo,
-#               lib-csproj, package-id, src-pat [, push-pat se doPush].
+#               secrets do KV (nome com dash, sem '_'): poc-pubkey, src-org, src-project,
+#               src-repo, lib-csproj, package-id, src-pat [, push-pat se doPush].
 #               (config nao-sensivel = parametros do YAML, nao VG: nupkgTfm, compareVersion)
 # ============================================================================
 
@@ -42,8 +41,7 @@ pool:
   name: PlatformAg06Hml
 
 variables:
-  - group: ci-poc                  # POC_PUBKEY (pubkey CGENC; manual)
-  - group: ci-lane-fc              # KV-backed (kv-agentic): src-org/src-project/src-repo/lib-csproj/package-id/src-pat [/push-pat]
+  - group: ci-lane-fc              # KV-backed (kv-agentic): poc-pubkey/src-org/src-project/src-repo/lib-csproj/package-id/src-pat [/push-pat]
   - name: CI_VERSION
     value: $[ format('2.0.{0}-ci', variables['Build.BuildId']) ]
 
@@ -65,7 +63,7 @@ steps:
       NUPKG_TFM: ${{ parameters.nupkgTfm }}
       COMPARE_VERSION: ${{ parameters.compareVersion }}
       SRC_PAT: $(src-pat)
-      POC_PUBKEY: $(POC_PUBKEY)
+      POC_PUBKEY: $(poc-pubkey)
     inputs:
       targetType: inline
       script: |
