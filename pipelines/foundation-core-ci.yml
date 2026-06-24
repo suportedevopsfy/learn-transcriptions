@@ -14,9 +14,11 @@
 #      -> [GATED] push no feed devopsfy. Default = shadow-only (doPush=false).
 #
 # Pre-req (VGs):
-#   ci-poc      (ja existe, VG 58): POC_PUBKEY  (chave PUBLICA p/ CGENC; nao-secreta)
-#   ci-lane-fc  (VOCE cria, SECRETO): SRC_ORG, SRC_PROJECT, SRC_REPO, LIB_CSPROJ,
-#               PACKAGE_ID, NUPKG_TFM, COMPARE_VERSION, SRC_PAT [, PUSH_PAT se doPush]
+#   ci-poc      (ja existe, VG 58, manual): POC_PUBKEY  (chave PUBLICA p/ CGENC; nao-secreta)
+#   ci-lane-fc  (VOCE cria, KV-BACKED -> kv-agentic via service connection ARM):
+#               secrets do KV (nome com dash, sem '_'): src-org, src-project, src-repo,
+#               lib-csproj, package-id, src-pat [, push-pat se doPush].
+#               (config nao-sensivel = parametros do YAML, nao VG: nupkgTfm, compareVersion)
 # ============================================================================
 
 trigger: none
@@ -29,13 +31,19 @@ parameters:
   - name: diagVisible
     type: boolean
     default: false                 # NAO usar em projeto publico: ecoaria o detalhe em claro
+  - name: nupkgTfm
+    type: string
+    default: 'net45'               # pasta lib/<tfm> do nupkg (nao-sensivel)
+  - name: compareVersion
+    type: string
+    default: ''                    # versao PUBLICADA p/ shadow (ex: 2.0.34); vazio = pula compare
 
 pool:
   name: PlatformAg06Hml
 
 variables:
-  - group: ci-poc                  # POC_PUBKEY (pubkey CGENC)
-  - group: ci-lane-fc              # SRC_* / LIB_CSPROJ / PACKAGE_ID / NUPKG_TFM / COMPARE_VERSION / SRC_PAT [/ PUSH_PAT]
+  - group: ci-poc                  # POC_PUBKEY (pubkey CGENC; manual)
+  - group: ci-lane-fc              # KV-backed (kv-agentic): src-org/src-project/src-repo/lib-csproj/package-id/src-pat [/push-pat]
   - name: CI_VERSION
     value: $[ format('2.0.{0}-ci', variables['Build.BuildId']) ]
 
@@ -49,14 +57,14 @@ steps:
     displayName: 'lib build + pack + shadow -> detalhe CIFRADO (CGENC)'
     retryCountOnTaskFailure: 0
     env:
-      SRC_ORG: $(SRC_ORG)
-      SRC_PROJECT: $(SRC_PROJECT)
-      SRC_REPO: $(SRC_REPO)
-      LIB_CSPROJ: $(LIB_CSPROJ)
-      PACKAGE_ID: $(PACKAGE_ID)
-      NUPKG_TFM: $(NUPKG_TFM)
-      COMPARE_VERSION: $(COMPARE_VERSION)
-      SRC_PAT: $(SRC_PAT)
+      SRC_ORG: $(src-org)
+      SRC_PROJECT: $(src-project)
+      SRC_REPO: $(src-repo)
+      LIB_CSPROJ: $(lib-csproj)
+      PACKAGE_ID: $(package-id)
+      NUPKG_TFM: ${{ parameters.nupkgTfm }}
+      COMPARE_VERSION: ${{ parameters.compareVersion }}
+      SRC_PAT: $(src-pat)
       POC_PUBKEY: $(POC_PUBKEY)
     inputs:
       targetType: inline
@@ -225,7 +233,7 @@ steps:
     - task: PowerShell@2
       displayName: 'PUSH -> feed devopsfy (GATED)'
       env:
-        PUSH_PAT: $(PUSH_PAT)
+        PUSH_PAT: $(push-pat)
       inputs:
         targetType: inline
         script: |
