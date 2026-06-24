@@ -1,0 +1,249 @@
+# ============================================================================
+# Lib CI lane — GENERIC / public-project hardened  (B-endurecido)
+# ============================================================================
+# Roda num projeto PUBLICO (qualquer um le o YAML e o log). Por isso:
+#   - ZERO literal identificador no YAML (org/projeto/repo/csproj/pacote/feed).
+#     Tudo vem de um VG SECRETO (injetado como env mascarado pelo ADO).
+#   - O DETALHE do build (nomes de repo, tipos do shadow, shas, paths) vai
+#     SO no blob CGENC (RSA-OAEP + AES-256). Em claro o log mostra apenas
+#     RESULT=... e contagens do shadow — nada que revele o cliente.
+#   - Regra de ouro: nada sensivel como LITERAL aqui (o ADO ecoa o script).
+#
+# Faz: clona o repo-fonte via PAT (runtime) -> MSBuild netfx (vswhere) ->
+#      pack nupkg -> SHADOW compare (superficie de tipos buildado vs publicado)
+#      -> [GATED] push no feed devopsfy. Default = shadow-only (doPush=false).
+#
+# Pre-req (VGs):
+#   ci-poc      (ja existe, VG 58): POC_PUBKEY  (chave PUBLICA p/ CGENC; nao-secreta)
+#   ci-lane-fc  (VOCE cria, SECRETO): SRC_ORG, SRC_PROJECT, SRC_REPO, LIB_CSPROJ,
+#               PACKAGE_ID, NUPKG_TFM, COMPARE_VERSION, SRC_PAT [, PUSH_PAT se doPush]
+# ============================================================================
+
+trigger: none
+pr: none
+
+parameters:
+  - name: doPush
+    type: boolean
+    default: false                 # SHADOW: false = build+pack+compare, NAO escreve no feed
+  - name: diagVisible
+    type: boolean
+    default: false                 # NAO usar em projeto publico: ecoaria o detalhe em claro
+
+pool:
+  name: PlatformAg06Hml
+
+variables:
+  - group: ci-poc                  # POC_PUBKEY (pubkey CGENC)
+  - group: ci-lane-fc              # SRC_* / LIB_CSPROJ / PACKAGE_ID / NUPKG_TFM / COMPARE_VERSION / SRC_PAT [/ PUSH_PAT]
+  - name: CI_VERSION
+    value: $[ format('2.0.{0}-ci', variables['Build.BuildId']) ]
+
+steps:
+  - checkout: none
+
+  - task: NuGetToolInstaller@1
+    displayName: 'provisiona nuget.exe'
+
+  - task: PowerShell@2
+    displayName: 'lib build + pack + shadow -> detalhe CIFRADO (CGENC)'
+    retryCountOnTaskFailure: 0
+    env:
+      SRC_ORG: $(SRC_ORG)
+      SRC_PROJECT: $(SRC_PROJECT)
+      SRC_REPO: $(SRC_REPO)
+      LIB_CSPROJ: $(LIB_CSPROJ)
+      PACKAGE_ID: $(PACKAGE_ID)
+      NUPKG_TFM: $(NUPKG_TFM)
+      COMPARE_VERSION: $(COMPARE_VERSION)
+      SRC_PAT: $(SRC_PAT)
+      POC_PUBKEY: $(POC_PUBKEY)
+    inputs:
+      targetType: inline
+      script: |
+        $ErrorActionPreference = 'Stop'
+        $ts = Get-Date -Format yyyyMMdd-HHmmss
+        # ---- todo identificador vem de env SECRETO (mascarado); nunca literal aqui ----
+        $req = 'SRC_ORG','SRC_PROJECT','SRC_REPO','LIB_CSPROJ','PACKAGE_ID','SRC_PAT','POC_PUBKEY'
+        foreach ($k in $req) {
+          $v = [Environment]::GetEnvironmentVariable($k)
+          if ([string]::IsNullOrWhiteSpace($v) -or $v -like '$(*)') { throw "$k vazio/nao-mapeado (VG ci-lane-fc / ci-poc)" }
+        }
+        $tfm = if ([string]::IsNullOrWhiteSpace($env:NUPKG_TFM)) { 'net45' } else { $env:NUPKG_TFM }
+
+        # detalhe COMPLETO (sensivel) acumula aqui -> sai SO cifrado
+        $detailLines = New-Object System.Collections.Generic.List[string]
+        $emit  = { param($m) $detailLines.Add(("" + $m)) }       # vai pro blob (sensivel ok)
+        $pub   = { param($m) Write-Host ("" + $m) }              # log publico (NUNCA nomes do cliente)
+        $result = 'LIB_FAILED'
+        $shadowCounts = $null
+
+        try {
+          & $emit "build start $ts host=$env:COMPUTERNAME pkg=$env:PACKAGE_ID org=$env:SRC_ORG proj=$env:SRC_PROJECT repo=$env:SRC_REPO ci=$(CI_VERSION)"
+
+          $git = (Get-Command git.exe -ErrorAction SilentlyContinue).Source
+          if (-not $git) { $git = Join-Path $env:AGENT_HOMEDIRECTORY 'externals\git\cmd\git.exe' }
+          if (-not (Test-Path $git)) { throw "git nao encontrado" }
+          $nuget = (Get-Command nuget.exe -ErrorAction SilentlyContinue).Source
+          if (-not $nuget) { throw "nuget.exe ausente" }
+
+          # ---- clona fonte (URL montada de env secreto -> mascarada) ----
+          $src = "$env:AGENT_TEMPDIRECTORY\fc-src"
+          if (Test-Path $src) { Remove-Item $src -Recurse -Force }
+          $cloneUrl = "https://dev.azure.com/$env:SRC_ORG/$env:SRC_PROJECT/_git/$env:SRC_REPO"
+          $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$env:SRC_PAT"))
+          $ErrorActionPreference = 'Continue'
+          $cloneLog = & $git -c http.extraheader="AUTHORIZATION: Basic $b64" clone --depth 1 $cloneUrl $src 2>&1
+          $rc = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          & $emit ("clone rc=$rc -> " + ($cloneLog -join ' | '))
+          if ($rc -ne 0 -or -not (Test-Path $src)) { throw "clone fonte falhou (git exit $rc)" }
+
+          $csproj = Join-Path $src ($env:LIB_CSPROJ.Replace('/','\'))
+          if (-not (Test-Path $csproj)) { throw "csproj nao encontrado" }
+          & $emit "csproj=$csproj"
+
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $mb = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          if (-not $mb) { throw "MSBuild ausente em $env:COMPUTERNAME" }
+          & $emit "msbuild=$mb"
+
+          # ---- nuget.config p/ restore (feed do cliente, montado de env) ----
+          $feed = "https://pkgs.dev.azure.com/$env:SRC_ORG/_packaging/$env:SRC_ORG/nuget/v3/index.json"
+          $ngc = Join-Path $env:AGENT_TEMPDIRECTORY 'fc-nuget.config'
+          @(
+            '<?xml version="1.0" encoding="utf-8"?>','<configuration>','  <packageSources>','    <clear />',
+            '    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />',
+            ('    <add key="src" value="' + $feed + '" />'),
+            '  </packageSources>','  <packageSourceCredentials>','    <src>',
+            '      <add key="Username" value="pat" />',
+            ('      <add key="ClearTextPassword" value="' + $env:SRC_PAT + '" />'),
+            '    </src>','  </packageSourceCredentials>','</configuration>'
+          ) | Set-Content -Path $ngc -Encoding UTF8
+
+          $ErrorActionPreference = 'Continue'
+          $restoreLog = & $nuget restore $csproj -ConfigFile $ngc -PackagesDirectory (Join-Path $src 'packages') -NonInteractive 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            $restoreLog += (& $mb $csproj /t:Restore /p:RestorePackagesConfig=true /p:RestoreConfigFile=$ngc /verbosity:minimal 2>&1)
+          }
+          & $emit ("restore -> " + (($restoreLog | Select-Object -Last 5) -join ' | '))
+
+          # ---- build Release ----
+          $buildLog = & $mb $csproj /p:Configuration=Release /p:Platform=AnyCPU /verbosity:minimal 2>&1
+          $rc = $LASTEXITCODE
+          & $emit ("msbuild rc=$rc -> " + (($buildLog | Select-Object -Last 8) -join ' | '))
+          if ($rc -ne 0) { throw "msbuild build falhou (exit $rc)" }
+          $ErrorActionPreference = 'Stop'
+
+          $dll = Get-ChildItem (Join-Path (Split-Path $csproj) 'bin\Release') -Filter "$env:PACKAGE_ID.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) { throw "DLL buildado nao encontrado" }
+          $builtSha = (Get-FileHash $dll.FullName -Algorithm SHA256).Hash
+          & $emit "BUILT dll=$($dll.FullName) bytes=$($dll.Length) sha256=$builtSha"
+
+          # ---- pack ----
+          $stage = "$env:AGENT_TEMPDIRECTORY\fc-pack"; if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Force (Join-Path $stage "lib\$tfm") | Out-Null
+          Copy-Item $dll.FullName (Join-Path $stage "lib\$tfm")
+          $nuspec = Join-Path $stage 'pkg.nuspec'
+          @(
+            '<?xml version="1.0" encoding="utf-8"?>','<package>','  <metadata>',
+            ('    <id>' + $env:PACKAGE_ID + '</id>'),('    <version>$(CI_VERSION)</version>'),
+            '    <authors>devopsfy.platform.ci</authors>','    <owners>devopsfy.platform.ci</owners>',
+            '    <requireLicenseAcceptance>false</requireLicenseAcceptance>',
+            '    <description>CI shadow build (netfx). Canal -ci. NAO e a versao publicada.</description>',
+            '  </metadata>','</package>'
+          ) | Set-Content -Path $nuspec -Encoding UTF8
+          $pkgOut = "$env:BUILD_ARTIFACTSTAGINGDIRECTORY\fc-nupkg"; New-Item -ItemType Directory -Force $pkgOut | Out-Null
+          $packLog = & $nuget pack $nuspec -BasePath $stage -OutputDirectory $pkgOut -NonInteractive 2>&1
+          if ($LASTEXITCODE -ne 0) { & $emit ($packLog -join ' | '); throw "nuget pack falhou" }
+          $nupkg = Get-ChildItem $pkgOut -Filter '*.nupkg' | Select-Object -First 1
+          & $emit "PACKED nupkg=$($nupkg.Name) size=$([math]::Round($nupkg.Length/1KB,1))KB"
+
+          # ---- SHADOW compare (nomes de tipos ficam SO no blob; em claro so contagem) ----
+          $cmpVer = $env:COMPARE_VERSION
+          if (-not [string]::IsNullOrWhiteSpace($cmpVer)) {
+            $cmpDir = "$env:AGENT_TEMPDIRECTORY\fc-cmp"; if (Test-Path $cmpDir) { Remove-Item $cmpDir -Recurse -Force }
+            $ErrorActionPreference = 'Continue'
+            & $nuget install $env:PACKAGE_ID -Version $cmpVer -Source 'src' -ConfigFile $ngc -OutputDirectory $cmpDir -DependencyVersion Ignore -NonInteractive 2>&1 | Out-Null
+            $ErrorActionPreference = 'Stop'
+            $pubDll = Get-ChildItem $cmpDir -Filter "$env:PACKAGE_ID.dll" -Recurse | Select-Object -First 1
+            if ($pubDll) {
+              & $emit "PUBLISHED $cmpVer dll=$($pubDll.FullName) bytes=$($pubDll.Length) sha256=$((Get-FileHash $pubDll.FullName -Algorithm SHA256).Hash)"
+              function TypeSurface($p){ try { $a=[Reflection.Assembly]::LoadFile($p); return ($a.GetExportedTypes() | ForEach-Object { $_.FullName } | Sort-Object) } catch { return $null } }
+              $tb = TypeSurface $dll.FullName; $tp = TypeSurface $pubDll.FullName
+              if ($tb -and $tp) {
+                $missing = $tp | Where-Object { $_ -notin $tb }
+                $extra   = $tb | Where-Object { $_ -notin $tp }
+                $shadowCounts = "SHADOW types: built=$($tb.Count) published=$($tp.Count) missing=$($missing.Count) extra=$($extra.Count)"
+                & $emit $shadowCounts
+                if ($missing.Count) { & $emit ("  MISSING: " + ($missing -join ', ')) }
+                if ($extra.Count)   { & $emit ("  EXTRA: " + ($extra -join ', ')) }
+                & $emit $(if ($missing.Count -eq 0) { "SHADOW=TYPESURFACE_OK" } else { "SHADOW=TYPESURFACE_REGRESSION" })
+              } else { & $emit "SHADOW=COMPARE_SKIPPED (reflection falhou)" }
+            } else { & $emit "SHADOW=PUBLISHED_NOT_FOUND ($cmpVer)" }
+          } else { & $emit "SHADOW=SKIPPED (COMPARE_VERSION vazio)" }
+
+          $result = 'LIB_OK'
+        } catch {
+          & $emit "ERRO: $($_.Exception.Message)"
+        } finally {
+          if ($ngc) { Remove-Item $ngc -Force -ErrorAction SilentlyContinue }
+        }
+        & $emit "RESULT=$result"
+
+        # ---- log PUBLICO: so o que nao revela o cliente ----
+        & $pub "RESULT=$result host=$env:COMPUTERNAME ci=$(CI_VERSION)"
+        if ($shadowCounts) {
+          & $pub $shadowCounts
+          & $pub (($detailLines | Where-Object { $_ -like 'SHADOW=*' } | Select-Object -Last 1))
+        }
+
+        # ---- CGENC: cifra o detalhe inteiro (RSA-OAEP envelopa AES-256-CBC) ----
+        $detail = ($detailLines -join [Environment]::NewLine)
+        $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+        $rsa.FromXmlString($env:POC_PUBKEY)
+        $aes=[System.Security.Cryptography.Aes]::Create();$aes.KeySize=256;$aes.GenerateKey();$aes.GenerateIV()
+        $pt=[Text.Encoding]::UTF8.GetBytes($detail)
+        $ct=$aes.CreateEncryptor().TransformFinalBlock($pt,0,$pt.Length)
+        $wk=$rsa.Encrypt($aes.Key,$true)
+        $ms=New-Object IO.MemoryStream;$bw=New-Object IO.BinaryWriter($ms)
+        $bw.Write([int]$wk.Length);$bw.Write($wk);$bw.Write($aes.IV);$bw.Write($ct);$bw.Flush()
+        & $pub "---BEGIN CGENC---"
+        & $pub ([Convert]::ToBase64String($ms.ToArray()))
+        & $pub "---END CGENC---"
+
+        if ($result -ne 'LIB_OK') { exit 1 }
+
+  - task: PublishPipelineArtifact@1
+    displayName: 'publish artifact fc-nupkg'
+    inputs:
+      targetPath: '$(Build.ArtifactStagingDirectory)\fc-nupkg'
+      artifact: 'fc-nupkg'
+
+  # ---- PUSH no feed devopsfy (GATED: doPush=true; precisa PUSH_PAT no VG ci-lane-fc) ----
+  - ${{ if eq(parameters.doPush, true) }}:
+    - task: PowerShell@2
+      displayName: 'PUSH -> feed devopsfy (GATED)'
+      env:
+        PUSH_PAT: $(PUSH_PAT)
+      inputs:
+        targetType: inline
+        script: |
+          $ErrorActionPreference='Stop'
+          if ([string]::IsNullOrWhiteSpace($env:PUSH_PAT) -or $env:PUSH_PAT -like '$(*)') { throw "PUSH_PAT vazio/nao-mapeado (VG ci-lane-fc; devopsfy Packaging:ReadWrite)." }
+          $feed = 'https://pkgs.dev.azure.com/devopsfy/_packaging/devopsfy/nuget/v3/index.json'
+          $nuget = (Get-Command nuget.exe -ErrorAction SilentlyContinue).Source
+          $nupkg = Get-ChildItem "$env:BUILD_ARTIFACTSTAGINGDIRECTORY\fc-nupkg" -Filter '*.nupkg' | Select-Object -First 1
+          if (-not $nupkg) { throw "nupkg nao encontrado p/ push" }
+          $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$env:PUSH_PAT"))
+          $cfg = Join-Path $env:AGENT_TEMPDIRECTORY 'push.nuget.config'
+          @('<?xml version="1.0" encoding="utf-8"?>','<configuration>','<packageSources>','<clear />',
+            ('<add key="dvf" value="' + $feed + '" />'),'</packageSources>',
+            '<packageSourceCredentials>','<dvf>','<add key="Username" value="pat" />',
+            ('<add key="ClearTextPassword" value="' + $env:PUSH_PAT + '" />'),'</dvf>',
+            '</packageSourceCredentials>','</configuration>') | Set-Content $cfg -Encoding UTF8
+          try {
+            & $nuget push $nupkg.FullName -Source 'dvf' -ApiKey 'az' -ConfigFile $cfg -NonInteractive 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "nuget push falhou (exit $LASTEXITCODE)" }
+          } finally { Remove-Item $cfg -Force -ErrorAction SilentlyContinue }
+          Write-Host "PUSH_OK -> feed devopsfy ($(CI_VERSION))"
