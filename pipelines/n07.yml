@@ -1,0 +1,47 @@
+# N07.Run — fungible build runner (opaque slot; no host/client/tunnel/bastion names).
+#
+# Why it lives here: this pipeline runs in a PUBLIC project (TO) so a self-hosted
+# job gets free + unlimited parallelism. The work it builds belongs to PRIVATE
+# projects, but the private target is NEVER named in this YAML — the tokened
+# clone happens inside the SecureFile payload (n07.sh). Keeps the public pipeline
+# definition free of any client/project identifier.
+#
+# Secrets (CLONE_URL, OUT_KEY) come from the variable group "n07" and are masked.
+# Full job output is encrypted into an artifact; the console only shows status.
+
+name: N07.Run
+
+parameters:
+  - name: ref
+    type: string
+    default: ''            # optional git ref to build; consumed by n07.sh
+
+trigger: none
+pr: none
+
+pool:
+  name: self-devopsfy      # org-level fungible pool (must be added to this project first)
+
+variables:
+  - group: n07             # CLONE_URL (tokened https, secret), OUT_KEY (secret)
+
+jobs:
+  - job: Run
+    timeoutInMinutes: 60
+    steps:
+      - checkout: none                       # nothing from this public repo; n07.sh clones the real target
+      - task: DownloadSecureFile@1
+        name: s
+        inputs: { secureFile: 'n07.sh' }
+      - bash: |
+          chmod +x "$(s.secureFilePath)"
+          "$(s.secureFilePath)"
+        displayName: "run"
+        env:
+          CLONE_URL: $(CLONE_URL)            # tokened https URL of the private repo (secret VG var)
+          OUT_KEY:   $(OUT_KEY)              # passphrase used to encrypt the output artifact (secret VG var)
+          REF:       ${{ parameters.ref }}
+      - publish: $(Build.ArtifactStagingDirectory)/n07-out.enc
+        artifact: n07-out
+        condition: always()
+        displayName: "publish encrypted output"
