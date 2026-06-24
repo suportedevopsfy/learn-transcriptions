@@ -8,18 +8,19 @@ steps:
 - checkout: none
 - powershell: |
     $ErrorActionPreference='Stop'
-    # detalhe "sensivel" simulado (em lane real: URLs internas, repos, saida de build)
-    $detail = "POC-DETAIL host=$env:COMPUTERNAME fake-url=https://example.invalid/internal/repo fake-token=ABC-123-XYZ ts=$(Get-Date -Format o)"
-    # CGENC: RSA-OAEP envelopa AES-256-CBC (PS5.1 puro, sem egress)
+    # "segredo" GERADO EM RUNTIME: nao existe no YAML; o eco do script mostra so o codigo, nunca o valor
+    $secret = [guid]::NewGuid().ToString() + '-' + [guid]::NewGuid().ToString()
+    $detail = "RUNTIME-ONLY secret=$secret host=$env:COMPUTERNAME ts=$(Get-Date -Format o)"
+    # CGENC: RSA-OAEP envelopa AES-256-CBC
     $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
     $rsa.FromXmlString($env:POC_PUBKEY)
-    $aes = [System.Security.Cryptography.Aes]::Create(); $aes.KeySize=256; $aes.GenerateKey(); $aes.GenerateIV()
-    $pt = [Text.Encoding]::UTF8.GetBytes($detail)
-    $ct = $aes.CreateEncryptor().TransformFinalBlock($pt,0,$pt.Length)
-    $wk = $rsa.Encrypt($aes.Key,$true)
-    $ms = New-Object IO.MemoryStream; $bw = New-Object IO.BinaryWriter($ms)
-    $bw.Write([int]$wk.Length); $bw.Write($wk); $bw.Write($aes.IV); $bw.Write($ct); $bw.Flush()
-    Write-Host "RAN_ON=$env:COMPUTERNAME cleartext_len=$($detail.Length) (cleartext nunca impresso)"
+    $aes=[System.Security.Cryptography.Aes]::Create();$aes.KeySize=256;$aes.GenerateKey();$aes.GenerateIV()
+    $pt=[Text.Encoding]::UTF8.GetBytes($detail)
+    $ct=$aes.CreateEncryptor().TransformFinalBlock($pt,0,$pt.Length)
+    $wk=$rsa.Encrypt($aes.Key,$true)
+    $ms=New-Object IO.MemoryStream;$bw=New-Object IO.BinaryWriter($ms)
+    $bw.Write([int]$wk.Length);$bw.Write($wk);$bw.Write($aes.IV);$bw.Write($ct);$bw.Flush()
+    Write-Host "RAN_ON=$env:COMPUTERNAME secret_len=$($secret.Length) (secret runtime; nunca impresso em claro)"
     Write-Host "---BEGIN CGENC---"
     Write-Host ([Convert]::ToBase64String($ms.ToArray()))
     Write-Host "---END CGENC---"
