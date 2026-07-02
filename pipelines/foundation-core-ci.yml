@@ -13,10 +13,11 @@
 #      pack nupkg -> SHADOW compare (superficie de tipos buildado vs publicado)
 #      -> [GATED] push no feed devopsfy. Default = shadow-only (doPush=false).
 #
-# Pre-req (1 VG so):
-#   ci-lane-fc  (VOCE cria, KV-BACKED -> kv-agentic via service connection ARM):
-#               secrets do KV (nome com dash, sem '_'): poc-pubkey, src-org, src-project,
-#               src-repo, lib-csproj, package-id, src-pat [, push-pat se doPush].
+# Pre-req (1 VG so, SEM Key Vault/service connection -- VG nativo do ADO):
+#   ci-lane-fc  (VOCE cria na UI, Library -> + Variable group):
+#               plain: poc-pubkey, src-org, src-project, src-repo, lib-csproj, package-id
+#               "Keep this value secret" SO em: src-pat [, push-pat se doPush]
+#               (ADO mascara automatico qualquer var isSecret=true no log, mesmo publico)
 #               (config nao-sensivel = parametros do YAML, nao VG: nupkgTfm, compareVersion)
 # ============================================================================
 
@@ -38,10 +39,10 @@ parameters:
     default: ''                    # versao PUBLICADA p/ shadow (ex: 2.0.34); vazio = pula compare
 
 pool:
-  name: PlatformAg06Hml
+  name: PlatformAg99Lc
 
 variables:
-  - group: ci-lane-fc              # KV-backed (kv-agentic): poc-pubkey/src-org/src-project/src-repo/lib-csproj/package-id/src-pat [/push-pat]
+  - group: ci-lane-fc              # VG nativo ADO: plain (poc-pubkey/src-org/src-project/src-repo/lib-csproj/package-id) + secret (src-pat [/push-pat])
   - name: CI_VERSION
     value: $[ format('2.0.{0}-ci', variables['Build.BuildId']) ]
 
