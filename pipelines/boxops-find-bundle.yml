@@ -1,0 +1,46 @@
+# BoxOps.Probe.Ag99Lc — caça ao bundle HPSA/HPSD no perfil Windows novo (pós-format).
+# READ-ONLY: só lista e mede. Sem sudo, sem instalar, sem escrever nada.
+name: BoxOps.Probe.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: FindBundle
+    timeoutInMinutes: 20
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          U="/mnt/c/Users/David Vidal Buena"
+
+          echo "===PROFILE_TOP==="
+          ls -la "$U" 2>&1 | head -40
+
+          echo "===ONEDRIVE_DIRS==="
+          find "$U" -maxdepth 1 -iname '*OneDrive*' 2>/dev/null
+
+          echo "===COMMON_DIRS==="
+          for d in Downloads Documents Desktop; do
+            echo "-- $d"
+            ls -la "$U/$d" 2>&1 | head -15
+          done
+
+          echo "===BIG_FILES (>500MB em todo o perfil, maxdepth 6)==="
+          timeout 120 find "$U" -maxdepth 6 -type f -size +500M 2>/dev/null \
+            -printf '%10s  %p\n' | sort -rn | head -30
+
+          echo "===TAR_ZIP (qualquer .tar/.zip, maxdepth 6)==="
+          timeout 120 find "$U" -maxdepth 6 -type f \( -iname '*.tar' -o -iname '*.zip' \) 2>/dev/null \
+            -printf '%10s  %p\n' | sort -rn | head -30
+
+          echo "===BUNDLE_BY_NAME (nomes conhecidos, disco inteiro)==="
+          timeout 180 find /mnt/c -maxdepth 8 \
+            \( -iname 'oraclexe*' -o -iname 'sa1_2*' -o -iname 'docker1*' -o -iname 'all_images_sd1*' \
+               -o -iname '*hpsa*' -o -iname '*hpsd*' \) 2>/dev/null | head -40
+
+          echo "===END==="
+        displayName: "Find HPSA/HPSD bundle in new Windows profile (read-only)"
