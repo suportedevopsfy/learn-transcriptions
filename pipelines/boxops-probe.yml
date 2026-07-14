@@ -1,0 +1,34 @@
+# BoxOps.Probe.Ag99Lc — read-only diagnóstico da box (NÃO é o túnel).
+# Sem secure files, sem ssh, sem inbound. Só coleta estado e sai verde.
+name: BoxOps.Probe.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: Probe
+    timeoutInMinutes: 15
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===ID==="; id; whoami; hostname
+          echo "===OS==="; uname -a; head -5 /etc/os-release 2>/dev/null
+          echo "===WSL==="; echo "WSL_DISTRO_NAME=$WSL_DISTRO_NAME"; echo "WSL_INTEROP=$WSL_INTEROP"; cat /proc/version 2>/dev/null
+          echo "===SUDO==="; sudo -n true 2>&1; echo "sudo_n_exit=$?"
+          echo "===TOOLS==="; for t in podman docker git unzip rsync python3 pip3 podman-compose java mvn; do printf "%s: " "$t"; command -v "$t" 2>/dev/null || echo MISSING; done
+          echo "===PODMAN==="; podman --version 2>&1; podman info --format '{{.Host.Security.Rootless}}' 2>&1; podman ps -a 2>&1 | head -20
+          echo "===COMPOSE==="; podman compose version 2>&1 | head -3; podman-compose --version 2>&1
+          echo "===SYSTEMD==="; systemctl is-system-running 2>&1; echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"; loginctl show-user "$(whoami)" 2>&1 | grep -i linger
+          echo "===DISK==="; df -h / /home 2>&1; df -h /mnt/c 2>&1
+          echo "===MEM==="; free -h 2>&1; echo "nproc=$(nproc 2>/dev/null)"
+          echo "===MNTC==="; ls /mnt/c/Users 2>&1 | head -20
+          echo "===ACCENTURE_DIRS==="; for u in /mnt/c/Users/*/Accenture; do echo "-- $u"; ls "$u" 2>&1 | head; done
+          echo "===BUNDLE==="; timeout 25 find /mnt/c/Users -maxdepth 7 \( -iname 'oraclexe.tar' -o -iname 'sa1_2.tar' -o -iname 'docker1.zip' -o -iname 'all_images_sd1.tar' \) 2>/dev/null | head
+          echo "===HOME==="; ls -la ~ 2>&1 | head -30; echo "-- part1"; ls -la ~/part1 2>&1 | head; echo "-- part2-hpsd"; ls -la ~/part2-hpsd 2>&1 | head
+          echo "===AGENTDIR==="; echo "PWD=$(pwd)"; echo "AGENT_HOMEDIRECTORY=$AGENT_HOMEDIRECTORY"; echo "AGENT_WORKFOLDER=$AGENT_WORKFOLDER"
+          echo "===END==="
+        displayName: "Probe box state (read-only)"
