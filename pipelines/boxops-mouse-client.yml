@@ -1,0 +1,48 @@
+# BoxOps.MouseClient.Ag99Lc — configura o Barrier CLIENT no host Windows Accenture.
+# Grava fingerprint do servidor, registra autostart (logon) e sobe o barrierc apontando
+# pro servidor hostd2 (192.168.1.50:24800, direto — DNAT .15.2 nao pega deste subnet).
+# Roda via WSL interop (powershell.exe do host). NAO e o tunel; outbound-only pro LAN de casa.
+name: BoxOps.MouseClient.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: MouseClient
+    timeoutInMinutes: 10
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          PS="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+          DEST_WSL="/mnt/c/Users/David Vidal Buena/AppData/Local/Temp/mouse-client.ps1"
+          DEST_WIN='C:\Users\David Vidal Buena\AppData\Local\Temp\mouse-client.ps1'
+          cat > "$DEST_WSL" <<'PSEOF'
+          $ErrorActionPreference='Continue'
+          $Screen='AP1943197841653'; $Server='192.168.1.50'; $Port=24800
+          $FP='v2:sha256:d2768ea390b3e7150b04da64e5fce527ca7a9f85aa400642454840fce33e5d53'
+          $Exe='C:\Program Files\Barrier\barrierc.exe'
+          if(-not (Test-Path $Exe)){ Write-Output 'ERRO: barrierc ausente'; exit 1 }
+          $fpDir=Join-Path $env:LOCALAPPDATA 'Barrier\SSL\Fingerprints'
+          New-Item -ItemType Directory -Force -Path $fpDir | Out-Null
+          $fpFile=Join-Path $fpDir 'TrustedServers.txt'
+          $cur=@(); if(Test-Path $fpFile){ $cur=@(Get-Content $fpFile | Where-Object { $_.Trim() -ne '' }) }
+          if($cur -notcontains $FP){ Set-Content -Path $fpFile -Value (@($cur)+$FP) -Encoding ascii; Write-Output 'fingerprint: gravada' } else { Write-Output 'fingerprint: ja confiada' }
+          $tc=(Test-NetConnection $Server -Port $Port -WarningAction SilentlyContinue).TcpTestSucceeded
+          Write-Output ("tcp {0}:{1}={2}" -f $Server,$Port,$tc)
+          # Launch NAO-persistente (sem autostart) — so valida a conexao agora.
+          try {
+            Start-Process -FilePath $Exe -ArgumentList ('--no-tray --debug INFO --name {0} --enable-crypto {1}:{2}' -f $Screen,$Server,$Port) -WindowStyle Hidden
+            Write-Output 'barrierc: iniciado (Start-Process, sem persistencia)'
+          } catch { Write-Output ('start: WARN ' + $_.Exception.Message) }
+          Start-Sleep 5
+          $p=Get-Process barrierc -ErrorAction SilentlyContinue
+          if($p){ Write-Output ('barrierc: RODANDO pid=' + ($p.Id -join ',')) } else { Write-Output 'barrierc: NAO esta rodando' }
+          PSEOF
+          echo "=== script escrito, invocando no host ==="
+          "$PS" -NoProfile -ExecutionPolicy Bypass -File "$DEST_WIN" 2>&1 | tr -d '\000\r'
+          echo "=== FIM ==="
+        displayName: "Barrier client setup (host via interop)"
