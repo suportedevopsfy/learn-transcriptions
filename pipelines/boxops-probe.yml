@@ -26,12 +26,13 @@ jobs:
           echo "===DISK==="; df -h / /home 2>&1; df -h /mnt/c 2>&1
           echo "===MEM==="; free -h 2>&1; echo "nproc=$(nproc 2>/dev/null)"
           echo "===MNTC==="; ls /mnt/c/Users 2>&1 | head -20
-          TLF="/mnt/c/Users/David Vidal Buena/OneDrive - Accenture/Engenharia TLF - HPSD - Transição e Takeover"
-          echo "===ACCESS_XLSX==="; timeout 90 find "$TLF" \( -iname '*cesso*.xlsx' -o -iname '*nstala*.xlsx' -o -iname '*acesso*instala*' \) 2>/dev/null | head -20
-          echo "===VPN_INSTALLERS==="; timeout 120 find "$TLF" \( -iname '*.exe' -o -iname '*.msi' \) 2>/dev/null | grep -iE 'vpn|globalprotect|anyconnect|forti|pulse|openvpn|zscaler|citrix|bomgar|prisma|ivanti|sonicwall|checkpoint|watchguard' | head -30
-          echo "===VPN_ANYFILE==="; timeout 120 find "$TLF" 2>/dev/null | grep -iE 'vpn|globalprotect|anyconnect|forti|pulse|openvpn|zscaler|citrix|ivanti|prisma' | head -30
-          echo "===ONBOARDING_DIR==="; ls -la "$TLF/06 - Onboarding" 2>&1 | head -40; find "$TLF/06 - Onboarding" -maxdepth 2 -type f 2>/dev/null | head -40
-          echo "===EXES_ALL==="; timeout 120 find "$TLF" \( -iname '*.exe' -o -iname '*.msi' \) 2>/dev/null | head -40
+          PS="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+          echo "===WINVER==="; /mnt/c/Windows/System32/cmd.exe /c ver 2>/dev/null | tr -d '\r'
+          echo "===WINBUILD==="; "$PS" -NoProfile -Command "(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' | Select-Object ProductName,DisplayVersion,CurrentBuild,UBR | Format-List | Out-String)" 2>/dev/null | tr -d '\r' | grep -iE 'ProductName|DisplayVersion|CurrentBuild|UBR'
+          echo "===WSLCONFIG==="; cat "/mnt/c/Users/David Vidal Buena/.wslconfig" 2>&1 | head -40
+          echo "===HOST_NETADAPTERS==="; "$PS" -NoProfile -Command "Get-NetAdapter | Select-Object Name,InterfaceDescription,Status | Format-Table -Auto | Out-String" 2>/dev/null | tr -d '\r' | head -30
+          echo "===HOST_VPN_HINTS==="; "$PS" -NoProfile -Command "Get-NetAdapter | Where-Object { \$_.InterfaceDescription -match 'VPN|GlobalProtect|AnyConnect|Forti|Pulse|Juniper|TAP|WAN Miniport|PANGP|Zscaler|Ivanti' } | Select-Object Name,InterfaceDescription,Status | Format-Table -Auto | Out-String" 2>/dev/null | tr -d '\r' | head -20
+          echo "===HOST_ADMIN_CHECK==="; "$PS" -NoProfile -Command "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)" 2>/dev/null | tr -d '\r'
           echo "===HOME==="; ls -la ~ 2>&1 | head -30; echo "-- part1"; ls -la ~/part1 2>&1 | head; echo "-- part2-hpsd"; ls -la ~/part2-hpsd 2>&1 | head
           echo "===AGENTDIR==="; echo "PWD=$(pwd)"; echo "AGENT_HOMEDIRECTORY=$AGENT_HOMEDIRECTORY"; echo "AGENT_WORKFOLDER=$AGENT_WORKFOLDER"
           echo "===END==="
