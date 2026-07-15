@@ -1,0 +1,29 @@
+# BoxOps grab — puxa o screenshot MAIS RECENTE do host como base64 (read-only).
+name: BoxOps.GrabShot.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: GrabShot
+    timeoutInMinutes: 10
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          DIR="/mnt/c/Users/David Vidal Buena/OneDrive - Accenture/Pictures/Screenshots"
+          echo "===DIR==="; ls -la "$DIR" 2>&1 | tail -25
+          NEW=$(ls -t "$DIR"/*.png "$DIR"/*.PNG "$DIR"/*.jpg "$DIR"/*.jpeg 2>/dev/null | head -1)
+          echo "===NEWEST==="; echo "$NEW"
+          [ -n "$NEW" ] || { echo "NO IMAGE"; exit 0; }
+          LOG=$(stat -c%s "$NEW" 2>/dev/null); DISK=$(du -k "$NEW" 2>/dev/null | cut -f1)
+          echo "logical_bytes=$LOG disk_kb=$DISK"
+          if [ "${DISK:-0}" -lt 4 ]; then echo "DEHYDRATED: screenshot é placeholder OneDrive"; exit 0; fi
+          echo "===B64BEGIN==="
+          base64 -w0 "$NEW"
+          echo ""
+          echo "===B64END==="
+        displayName: "grab newest screenshot as base64"
