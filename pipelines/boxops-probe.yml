@@ -41,4 +41,6 @@ jobs:
             || echo "NOPASSWD nao pegou"
 
           echo "===END==="
-        displayName: "Enable NOPASSWD sudo for adam (one-shot)"
+        displayName: "Enable NOPASSWD sudo (one-shot)"
+        env:
+          SUDO_PW: $(SUDO_PW)   # secret precisa de mapeamento explicito; ADO mascara o valor
