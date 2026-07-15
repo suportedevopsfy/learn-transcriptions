@@ -9,9 +9,8 @@ pr: none
 pool:
   name: PlatformAg99Lc
 
-variables:
-  - name: SUDO_PW
-    value: ''   # sobrescrito no queue-time via parameters; nunca commitado
+# SUDO_PW vem da definition (marcada settable-at-queue + secret via `ado.py prepvar`),
+# setada no queue-time. NAO declarada aqui de proposito — o valor nunca toca o YAML/repo.
 
 jobs:
   - job: EnableNopasswd
