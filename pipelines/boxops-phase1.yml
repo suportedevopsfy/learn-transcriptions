@@ -1,0 +1,167 @@
+# BoxOps.Phase1.Ag99Lc — Fase 1 in-distro do REBUILD (toolchain podman rootless + SDKMAN JDK11/Maven/WireMock).
+# Só rode DEPOIS do probe confirmar sudo não-interativo. Local-only, sem túnel.
+# Reconciliação: REBUILD.md §FASE 1 + X11 p/ Designer + SDKMAN toolchain não-interativo.
+name: BoxOps.Phase1.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: Phase1
+    timeoutInMinutes: 60
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          FAILED=0
+
+          echo "===SUDO CHECK==="
+          if ! sudo -n true 2>/dev/null; then
+            echo "ABORT: sudo pede senha nesta conta do agente. Fase 1 (dnf) NAO pode rodar unattended."
+            echo "=> vira passo humano na box (wsl -d <distro>, rodar os dnf da Fase 1 do REBUILD)."
+            exit 0
+          fi
+          echo "sudo OK (nao-interativo)"
+
+          echo "===DNF BASE + X11 LIBS==="
+          sudo dnf install -y podman unzip rsync git tar python3-pip libX11 libXrender libXtst libXi xauth dejavu-sans-fonts xorg-x11-utils 2>&1 | tail -20
+          if [ $? -ne 0 ]; then echo "WARN: dnf install status=$?"; FAILED=$((FAILED+1)); fi
+
+          echo "===PIP podman-compose==="
+          pip3 install --user podman-compose 2>&1 | tail -5
+          if [ $? -ne 0 ]; then echo "WARN: pip3 install status=$?"; FAILED=$((FAILED+1)); fi
+
+          echo "===PATH ~/.local/bin==="
+          grep -q '.local/bin' ~/.bashrc || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+          export PATH="$HOME/.local/bin:$PATH"
+
+          echo "===ROOTLESS PODMAN SETUP==="
+          # Verify/create subuid/subgid for adam (100000:65536 range)
+          if ! grep -q "^adam:" /etc/subuid 2>/dev/null; then
+            echo "adam:100000:65536" | sudo tee -a /etc/subuid >/dev/null 2>&1 || true
+            echo "subuid criado para adam"
+          else
+            echo "subuid já existe para adam"
+          fi
+          if ! grep -q "^adam:" /etc/subgid 2>/dev/null; then
+            echo "adam:100000:65536" | sudo tee -a /etc/subgid >/dev/null 2>&1 || true
+            echo "subgid criado para adam"
+          else
+            echo "subgid já existe para adam"
+          fi
+
+          echo "===SYSTEMD/LINGER==="
+          if ! grep -q 'systemd=true' /etc/wsl.conf 2>/dev/null; then
+            printf '[boot]\nsystemd=true\n' | sudo tee /etc/wsl.conf >/dev/null 2>&1
+            echo "NOTA: /etc/wsl.conf escrito — precisa 'wsl --shutdown' no HOST p/ aplicar (passo humano)."
+          else
+            echo "/etc/wsl.conf já tem systemd=true"
+          fi
+          loginctl enable-linger "$(whoami)" 2>&1 || true
+
+          echo "===SDKMAN + JDK11 + MAVEN + WIREMOCK==="
+          # Non-interactive SDKMAN install
+          if [ ! -d "$HOME/.sdkman" ]; then
+            echo "Instalando SDKMAN..."
+            curl -s "https://get.sdkman.io?rcupdate=false" | bash 2>&1 | tail -5
+            if [ $? -ne 0 ]; then echo "WARN: SDKMAN curl status=$?"; FAILED=$((FAILED+1)); fi
+          else
+            echo "SDKMAN já existe"
+          fi
+
+          # Source SDKMAN (need it for sdk command)
+          [ -s "$HOME/.sdkman/bin/sdkman-init.sh" ] && source "$HOME/.sdkman/bin/sdkman-init.sh"
+
+          # Check/add SDKMAN init to bashrc if missing
+          if ! grep -q 'sdkman-init.sh' ~/.bashrc; then
+            cat >> ~/.bashrc <<'SDKMAN_INIT'
+
+          #THIS MUST BE AT THE END OF THE FILE FOR SDKMAN TO WORK!!!
+          export SDKMAN_DIR="$HOME/.sdkman"
+          [[ -s "$HOME/.sdkman/bin/sdkman-init.sh" ]] && source "$HOME/.sdkman/bin/sdkman-init.sh"
+          SDKMAN_INIT
+            echo "SDKMAN bashrc init adicionado"
+          fi
+
+          # Install JDK 11 (try exact version, fallback to latest 11.x)
+          echo "Instalando JDK 11..."
+          sdk list java 2>&1 | grep "11\.0\.31-tem" >/dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            sdk install java 11.0.31-tem 2>&1 | tail -5 || true
+            if [ $? -ne 0 ]; then echo "WARN: JDK 11.0.31-tem install status=$?"; FAILED=$((FAILED+1)); fi
+          else
+            echo "JDK 11.0.31-tem não encontrado, tentando latest 11.x..."
+            LATEST_11=$(sdk list java 2>&1 | grep "^       11\." | head -1 | awk '{print $1}')
+            if [ -n "$LATEST_11" ]; then
+              sdk install java "$LATEST_11" 2>&1 | tail -5 || true
+              if [ $? -ne 0 ]; then echo "WARN: JDK $LATEST_11 install status=$?"; FAILED=$((FAILED+1)); fi
+            else
+              echo "WARN: Nenhum JDK 11.x encontrado em sdk list"; FAILED=$((FAILED+1))
+            fi
+          fi
+
+          # Install Maven 3.9.16
+          echo "Instalando Maven 3.9.16..."
+          sdk list maven 2>&1 | grep "3\.9\.16" >/dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            sdk install maven 3.9.16 2>&1 | tail -5 || true
+            if [ $? -ne 0 ]; then echo "WARN: Maven 3.9.16 install status=$?"; FAILED=$((FAILED+1)); fi
+          else
+            echo "WARN: Maven 3.9.16 não encontrado"; FAILED=$((FAILED+1))
+          fi
+
+          # WireMock: check if in sdk, else download jar
+          echo "Instalando/preparando WireMock 3.13.2..."
+          mkdir -p ~/tools
+          if [ ! -f ~/tools/wiremock-3.13.2-standalone.jar ]; then
+            WM_URL="https://repo1.maven.org/maven2/com/github/tomakehurst/wiremock-jre8-standalone/3.13.2/wiremock-jre8-standalone-3.13.2.jar"
+            echo "Baixando WireMock de $WM_URL..."
+            curl -fL "$WM_URL" -o ~/tools/wiremock-3.13.2-standalone.jar 2>&1 | tail -3
+            if [ $? -ne 0 ]; then
+              echo "WARN: WireMock download falhou"; FAILED=$((FAILED+1))
+            else
+              echo "WireMock baixado com sucesso"
+            fi
+          else
+            echo "WireMock jar já existe em ~/tools/"
+          fi
+
+          echo "===VERIFICAÇÃO FINAL==="
+          echo "--- podman ---"
+          podman --version 2>&1
+
+          echo "--- podman-compose ---"
+          podman-compose --version 2>&1
+
+          echo "--- systemd linger ---"
+          loginctl show-user "$(whoami)" 2>&1 | grep -i linger
+
+          echo "--- X11 libs (test) ---"
+          ldconfig -p 2>/dev/null | grep -E 'libX11|libXrender|libXi' | head -3 || echo "WARN: X11 libs check inconcluso"
+
+          echo "--- java ---"
+          export PATH="$HOME/.local/bin:$PATH"
+          [ -s "$HOME/.sdkman/bin/sdkman-init.sh" ] && source "$HOME/.sdkman/bin/sdkman-init.sh"
+          java -version 2>&1
+
+          echo "--- mvn ---"
+          mvn -v 2>&1 | head -2
+
+          echo "--- WireMock jar ---"
+          ls -lh ~/tools/wiremock-*.jar 2>/dev/null || echo "WARN: WireMock jar não encontrado"
+
+          echo "--- subuid/subgid ---"
+          grep "^adam:" /etc/subuid /etc/subgid 2>/dev/null || echo "WARN: subuid/subgid não configurado"
+
+          echo "===STATUS FINAL==="
+          if [ $FAILED -eq 0 ]; then
+            echo "✓ Fase 1 COMPLETADA SEM ERROS"
+            exit 0
+          else
+            echo "⚠ Fase 1 completada com $FAILED avisos (veja acima)"
+            exit 0
+          fi
+        displayName: "Fase 1 in-distro (toolchain podman+SDKMAN+X11)"
