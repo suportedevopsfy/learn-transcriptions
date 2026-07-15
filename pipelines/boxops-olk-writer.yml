@@ -20,13 +20,18 @@ jobs:
           DEST="$HOME/tools/olk-scan.sh"
           cat > "$DEST" <<'OLKEOF'
           #!/usr/bin/env bash
-          # olk-scan.sh — varre o cache LOCAL do novo Outlook (Olk) por VPN/changeme.
+          # olk-scan.sh — varre o cache LOCAL do novo Outlook (MSIX) por VPN/changeme.
           # 100% local: sem rede, sem pipeline, sem túnel. Read-only.
           set -uo pipefail
-          OLK="${1:-/mnt/c/Users/David Vidal Buena/AppData/Local/Microsoft/Olk}"
-          if [ ! -d "$OLK" ]; then
-            echo "!! Olk não encontrado: $OLK"
-            echo "   Ache: find /mnt/c/Users -maxdepth 6 -type d -name Olk 2>/dev/null"
+          OLK="${1:-}"
+          if [ -z "$OLK" ]; then
+            # auto-descoberta local: pacote MSIX do novo Outlook, senão pasta Olk clássica
+            OLK=$(find /mnt/c/Users -maxdepth 6 -type d -iname 'Microsoft.OutlookForWindows_*' 2>/dev/null | head -1)
+            [ -z "$OLK" ] && OLK=$(find /mnt/c/Users -maxdepth 6 -type d -name Olk 2>/dev/null | head -1)
+          fi
+          if [ -z "$OLK" ] || [ ! -d "$OLK" ]; then
+            echo "!! store do Outlook não encontrado automaticamente."
+            echo "   Passe o path na mão: bash olk-scan.sh '/mnt/c/Users/.../Microsoft.OutlookForWindows_8wekyb3d8bbwe'"
             exit 1
           fi
           echo "# Olk: $OLK"
