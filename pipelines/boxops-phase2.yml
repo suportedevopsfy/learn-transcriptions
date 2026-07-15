@@ -1,0 +1,163 @@
+# BoxOps.Phase2.Ag99Lc — Fase 2 bundle load (HPSA + HPSD container images).
+# Local-only, sem túnel. Assume os tars já estão hidratados em um bundle dir.
+# Roadblock: se faltar algum tar, que passo reporte MISSING mas continue (não aborta job).
+name: BoxOps.Phase2.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+variables:
+  # Path onde estão os tars (ajuste conforme estiver materializado no host Windows)
+  # Windows profile pós-reimage: "David Vidal Buena" (COM ESPAÇOS), não "david.vidal.buena"
+  # Procura recursivamente sob a pasta do usuário, suporta OneDrive hidratada/online-only
+  # Se não encontrar: reporta MISSING, não falha a job
+  BUNDLE_BASE: "/mnt/c/Users/David Vidal Buena"
+  HPSA_BUNDLE: "$(BUNDLE_BASE)"
+  HPSD_BUNDLE: "$(BUNDLE_BASE)"
+
+jobs:
+  - job: Phase2BundleLoad
+    timeoutInMinutes: 60
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===PHASE 2: Bundle Load==="
+          echo "BUNDLE_BASE: $(BUNDLE_BASE)"
+          echo "HPSA_BUNDLE: $(HPSA_BUNDLE)"
+          echo "HPSD_BUNDLE: $(HPSD_BUNDLE)"
+
+          # Criar dirs de trabalho
+          mkdir -p ~/part1 ~/part2-hpsd
+
+          echo ""
+          echo "===HPSA: Procurar tars (busca recursiva a partir de $(BUNDLE_BASE))==="
+          EXPECTED_ORACLEXE=5926330368
+          EXPECTED_SA1_2=3412847104
+
+          # Busca recursiva sob a pasta do usuário — suporta OneDrive/subpastas aninhadas
+          HPSA_ORACLEXE=$(find "$(BUNDLE_BASE)" -name "oraclexe.tar" -type f 2>/dev/null | head -1)
+          HPSA_SA1_2=$(find "$(BUNDLE_BASE)" -name "sa1_2.tar" -type f 2>/dev/null | head -1)
+
+          if [ -n "$HPSA_ORACLEXE" ] && [ -f "$HPSA_ORACLEXE" ]; then
+            SIZE_ORACLEXE=$(stat -c %s "$HPSA_ORACLEXE" 2>/dev/null || echo "0")
+            echo "oraclexe.tar encontrado: $HPSA_ORACLEXE"
+            echo "  size: $SIZE_ORACLEXE bytes (esperado: $EXPECTED_ORACLEXE)"
+            if [ "$SIZE_ORACLEXE" -lt "$EXPECTED_ORACLEXE" ]; then
+              echo "  ⚠️  MISSING/PARTIAL: arquivo está desidratado ou corrompido"
+            fi
+          else
+            echo "❌ MISSING: oraclexe.tar não encontrado em $(BUNDLE_BASE) ou subpastas"
+          fi
+
+          if [ -n "$HPSA_SA1_2" ] && [ -f "$HPSA_SA1_2" ]; then
+            SIZE_SA1_2=$(stat -c %s "$HPSA_SA1_2" 2>/dev/null || echo "0")
+            echo "sa1_2.tar encontrado: $HPSA_SA1_2"
+            echo "  size: $SIZE_SA1_2 bytes (esperado: $EXPECTED_SA1_2)"
+            if [ "$SIZE_SA1_2" -lt "$EXPECTED_SA1_2" ]; then
+              echo "  ⚠️  MISSING/PARTIAL: arquivo está desidratado ou corrompido"
+            fi
+          else
+            echo "❌ MISSING: sa1_2.tar não encontrado em $(BUNDLE_BASE) ou subpastas"
+          fi
+
+          echo ""
+          echo "===HPSA: Copiar tars==="
+          if [ -f "$HPSA_ORACLEXE" ]; then
+            echo "Copiando oraclexe.tar para ~/part1/ ..."
+            cp "$HPSA_ORACLEXE" ~/part1/ || { echo "FALHA ao copiar oraclexe.tar"; }
+          fi
+          if [ -f "$HPSA_SA1_2" ]; then
+            echo "Copiando sa1_2.tar para ~/part1/ ..."
+            cp "$HPSA_SA1_2" ~/part1/ || { echo "FALHA ao copiar sa1_2.tar"; }
+          fi
+
+          echo ""
+          echo "===HPSA: Validar cópia==="
+          cd ~/part1
+          if [ -f oraclexe.tar ]; then
+            COPY_SIZE=$(stat -c %s oraclexe.tar 2>/dev/null || echo "0")
+            echo "oraclexe.tar copiado: $COPY_SIZE bytes"
+            if [ "$COPY_SIZE" -lt "$EXPECTED_ORACLEXE" ]; then
+              echo "⚠️  Cópia baixa — arquivo pode estar ainda desidratado"
+            fi
+          fi
+          if [ -f sa1_2.tar ]; then
+            COPY_SIZE=$(stat -c %s sa1_2.tar 2>/dev/null || echo "0")
+            echo "sa1_2.tar copiado: $COPY_SIZE bytes"
+          fi
+
+          echo ""
+          echo "===HPSA: Carregar imagens==="
+          if [ -f oraclexe.tar ]; then
+            echo "podman load -i oraclexe.tar ..."
+            podman load -i oraclexe.tar 2>&1 | tail -5 || echo "⚠️  podman load oraclexe.tar falhou"
+          else
+            echo "❌ SKIP: oraclexe.tar não encontrado após cópia"
+          fi
+
+          if [ -f sa1_2.tar ]; then
+            echo "podman load -i sa1_2.tar ..."
+            podman load -i sa1_2.tar 2>&1 | tail -5 || echo "⚠️  podman load sa1_2.tar falhou"
+          else
+            echo "❌ SKIP: sa1_2.tar não encontrado após cópia"
+          fi
+
+          echo ""
+          echo "===HPSD: Procurar docker1.zip (busca recursiva)==="
+          EXPECTED_ZIP=6100000000  # ~6.1 GB (aproximado)
+
+          # Busca recursiva sob a pasta do usuário
+          HPSD_ZIP=$(find "$(BUNDLE_BASE)" -name "docker1.zip" -type f 2>/dev/null | head -1)
+
+          if [ -n "$HPSD_ZIP" ] && [ -f "$HPSD_ZIP" ]; then
+            SIZE_ZIP=$(stat -c %s "$HPSD_ZIP" 2>/dev/null || echo "0")
+            echo "docker1.zip encontrado: $HPSD_ZIP"
+            echo "  size: $SIZE_ZIP bytes (esperado: ~$EXPECTED_ZIP)"
+            if [ "$SIZE_ZIP" -lt 5000000000 ]; then
+              echo "  ⚠️  Arquivo parece desidratado ou truncado"
+            fi
+          else
+            echo "❌ MISSING: docker1.zip não encontrado em $(BUNDLE_BASE) ou subpastas"
+          fi
+
+          echo ""
+          echo "===HPSD: Descompactar e carregar==="
+          cd ~/part2-hpsd
+          if [ -f "$HPSD_ZIP" ]; then
+            echo "Copiando docker1.zip ..."
+            cp "$HPSD_ZIP" . || { echo "FALHA ao copiar docker1.zip"; }
+            echo "Descompactando docker1.zip ..."
+            unzip -q docker1.zip 2>&1 | tail -3 || { echo "⚠️  unzip falhou"; }
+
+            if [ -f docker/all_images_sd1.tar ]; then
+              SIZE_TARSD=$(stat -c %s docker/all_images_sd1.tar 2>/dev/null || echo "0")
+              echo "all_images_sd1.tar extraído: $SIZE_TARSD bytes"
+              echo "Carregando all_images_sd1.tar (pode levar 5+ min) ..."
+              podman load -i docker/all_images_sd1.tar 2>&1 | tail -5 || echo "⚠️  podman load all_images_sd1.tar falhou"
+            else
+              echo "❌ MISSING: docker/all_images_sd1.tar dentro do zip"
+            fi
+          else
+            echo "❌ SKIP: docker1.zip não encontrado"
+          fi
+
+          echo ""
+          echo "===Imagens carregadas no podman==="
+          podman images || true
+
+          echo ""
+          echo "===Resumo de volumes==="
+          echo "Part1 (HPSA):"
+          ls -lh ~/part1/ 2>/dev/null | head -10 || echo "  (não existe ou vazio)"
+          echo ""
+          echo "Part2-HPSD:"
+          ls -lh ~/part2-hpsd/ 2>/dev/null | head -10 || echo "  (não existe ou vazio)"
+          ls -lh ~/part2-hpsd/docker/ 2>/dev/null | head -10 || echo "  (não existe ou vazio)"
+
+          echo ""
+          echo "===END PHASE 2==="
+        displayName: "Fase 2: Bundle load (podman load)"
