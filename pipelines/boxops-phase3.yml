@@ -1,0 +1,239 @@
+# BoxOps.Phase3.Ag99Lc — Fase 3 compose up (HPSA + HPSD orquestração).
+# Aplica 3 bug-fixes pré-conhecidos via sed. Aguarda healthcheck cascata.
+# NÃO é o túnel — é container local, sem rede external.
+name: BoxOps.Phase3.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: Phase3ComposeUp
+    timeoutInMinutes: 120
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===PHASE 3: Compose Up==="
+
+          echo ""
+          echo "===HPSA Compose Setup==="
+          cd ~/part1
+
+          # BUG FIX 1: Porta privilegiada 1022:1022 em podman rootless
+          # Motivo: podman rootless não pode expor portas <1024 direto. Fix: remap para 11022:1022
+          # (host port deve ser ≥1024, container port pode ser qualquer um)
+          echo "Aplicando fix 1 — porta 1022→11022 no docker-compose.yml"
+          if [ -f docker-compose.yml ]; then
+            sed -i 's/1022:1022/11022:1022/' docker-compose.yml
+            echo "  ✓ sed aplicado"
+          else
+            echo "  ❌ docker-compose.yml não encontrado em ~/part1/"
+            exit 1
+          fi
+
+          echo "Validando docker-compose.yml após fix"
+          podman compose -f docker-compose.yml config > /dev/null 2>&1
+          PARSE_RC=$?
+          if [ $PARSE_RC -eq 0 ]; then
+            echo "  ✓ YAML parse OK"
+          else
+            echo "  ❌ YAML parse FALHOU (exit code $PARSE_RC)"
+          fi
+
+          echo "Subindo HPSA stack (part1)"
+          echo "  → Oracle DBCA começará (esperar ~35 min)"
+          podman compose -f docker-compose.yml up -d 2>&1 | tail -10
+          sleep 5
+
+          echo ""
+          echo "===HPSD Compose Setup==="
+          cd ~/part2-hpsd/docker
+
+          # BUG FIX 2 & 3: YAML 1.1 sexagesimal + colisão de porta
+          # ⚠️ YAML 1.1 parsa N:M como base-60 se M < 60 e não estiver entre aspas.
+          # Exemplo: "1022:22" é parseado como inteiro 661342 (1022*60 + 22), não como mapping de porta!
+          # Fix: TODA porta N:M onde M < 60 precisa estar entre aspas: '1022:22'
+          # Também: colisão — 11022 é já usado pelo HPSA (part1_sasp_ep). Use 21022 para HPSD.
+          echo "Aplicando fix 2/3 — portas :22 com aspas e 11022→21022"
+          if [ -f docker-compose.yml ]; then
+            # Fix 2+3: sdsp_vivo 1022:22 → '21022:22' (nova porta, com aspas)
+            sed -i "s|1022:22|'21022:22'|" docker-compose.yml
+
+            # Validação extra: listar todas as portas <60 e avisar se faltarem aspas
+            echo "Verificando outras portas <60 (devem estar entre aspas):"
+            grep -nE "[0-9]+:(([0-9])|([1-5][0-9]))\"?$" docker-compose.yml || echo "  (nenhuma encontrada ou todas já têm aspas)"
+            echo "  ✓ sed aplicados"
+          else
+            echo "  ❌ docker-compose.yml não encontrado em ~/part2-hpsd/docker/"
+            exit 1
+          fi
+
+          echo "Validando docker-compose.yml após fixes"
+          podman compose -f docker-compose.yml config > /dev/null 2>&1
+          PARSE_RC=$?
+          if [ $PARSE_RC -eq 0 ]; then
+            echo "  ✓ YAML parse OK"
+          else
+            echo "  ❌ YAML parse FALHOU (exit code $PARSE_RC)"
+          fi
+
+          echo "Sourciar env.sh rhel (variáveis HPSD)"
+          if [ -f env.sh ]; then
+            . ./env.sh rhel
+            echo "  ✓ env.sh sourced"
+          else
+            echo "  ⚠️  env.sh não encontrado, tentando compose sem ele"
+          fi
+
+          echo "Subindo HPSD stack (part2-hpsd)"
+          echo "  → Oracle 19.3 DBCA (~35 min) + cascata MUSE (~25 min)"
+          podman compose -f docker-compose.yml up -d 2>&1 | tail -10
+          sleep 5
+
+          echo ""
+          echo "===Aguardando healthchecks (cascata com ready-strings)==="
+          echo "Monitorando estado dos containers..."
+
+          # Descobrir nomes dos containers dinamicamente (nomes podem variar)
+          echo ""
+          echo "Descobrindo nomes dos containers (padronão: sadb=DB, sasp=SP, sddb=DB, sdsp=SP)..."
+          HPSA_DB_NAME=$(podman ps -a --format '{{.Names}}' | grep -i sadb | head -1)
+          HPSA_SP_NAME=$(podman ps -a --format '{{.Names}}' | grep -i sasp | head -1)
+          HPSD_DB_NAME=$(podman ps -a --format '{{.Names}}' | grep -i "sddb\|sd_db" | head -1)
+          HPSD_SP_NAME=$(podman ps -a --format '{{.Names}}' | grep -i "sdsp\|sd_sp" | head -1)
+
+          echo "  HPSA DB: $HPSA_DB_NAME"
+          echo "  HPSA SP: $HPSA_SP_NAME"
+          echo "  HPSD DB: $HPSD_DB_NAME"
+          echo "  HPSD SP: $HPSD_SP_NAME"
+
+          # Loop: polling com ready-strings em vez de generic 'healthy'
+          # Oracle DB: aguarda "Configuration completed successfully" (DBCA)
+          # WildFly/SP: aguarda "Started NNNN of MMMM services" (boot complete)
+          HEALTHCHECK_TIMEOUT=$((90 * 60))  # 90 min em segundos
+          ELAPSED=0
+          INTERVAL=30
+
+          HPSA_DB_READY=0
+          HPSA_SP_READY=0
+          HPSD_DB_READY=0
+          HPSD_SP_READY=0
+
+          while [ $ELAPSED -lt $HEALTHCHECK_TIMEOUT ]; do
+            echo ""
+            echo "[T+${ELAPSED}s] Container status:"
+            podman ps -a --format "table {{.Names}}\t{{.Status}}" | grep -E "(sadb|sasp|sddb|sdsp)" || true
+
+            # Verificar ready-strings (não é "healthy", é conteúdo do log)
+            if [ -z "$HPSA_DB_NAME" ]; then
+              echo "  HPSA DB: container não encontrado"
+            elif [ $HPSA_DB_READY -eq 0 ]; then
+              if podman logs "$HPSA_DB_NAME" 2>/dev/null | grep -q "Configuration completed successfully"; then
+                HPSA_DB_READY=1
+                echo "  ✓ HPSA DB: Configuration completed (DBCA ready)"
+              else
+                PROGRESS=$(podman logs "$HPSA_DB_NAME" 2>/dev/null | grep -oE '[0-9]+%' | tail -1)
+                echo "  ⏳ HPSA DB: DBCA in progress ${PROGRESS:-...}"
+              fi
+            else
+              echo "  ✓ HPSA DB: ready"
+            fi
+
+            if [ -z "$HPSA_SP_NAME" ]; then
+              echo "  HPSA SP: container não encontrado"
+            elif [ $HPSA_SP_READY -eq 0 ]; then
+              if podman logs "$HPSA_SP_NAME" 2>/dev/null | grep -q "Started.*of.*services"; then
+                HPSA_SP_READY=1
+                echo "  ✓ HPSA SP: Started NNNN of MMMM services (WildFly boot complete)"
+              else
+                echo "  ⏳ HPSA SP: WildFly bootstrap in progress"
+              fi
+            else
+              echo "  ✓ HPSA SP: ready"
+            fi
+
+            if [ -z "$HPSD_DB_NAME" ]; then
+              echo "  HPSD DB: container não encontrado"
+            elif [ $HPSD_DB_READY -eq 0 ]; then
+              if podman logs "$HPSD_DB_NAME" 2>/dev/null | grep -q "Configuration completed successfully"; then
+                HPSD_DB_READY=1
+                echo "  ✓ HPSD DB: Configuration completed (Oracle 19.3 ready)"
+              else
+                PROGRESS=$(podman logs "$HPSD_DB_NAME" 2>/dev/null | grep -oE '[0-9]+%' | tail -1)
+                echo "  ⏳ HPSD DB: DBCA in progress ${PROGRESS:-...}"
+              fi
+            else
+              echo "  ✓ HPSD DB: ready"
+            fi
+
+            if [ -z "$HPSD_SP_NAME" ]; then
+              echo "  HPSD SP: container não encontrado"
+            elif [ $HPSD_SP_READY -eq 0 ]; then
+              if podman logs "$HPSD_SP_NAME" 2>/dev/null | grep -q "Started.*of.*services"; then
+                HPSD_SP_READY=1
+                echo "  ✓ HPSD SP: Started NNNN of MMMM services (JBoss boot complete)"
+              else
+                echo "  ⏳ HPSD SP: JBoss bootstrap in progress"
+              fi
+            else
+              echo "  ✓ HPSD SP: ready"
+            fi
+
+            # Goal: todos os essenciais ready
+            if [ $HPSA_DB_READY -eq 1 ] && [ $HPSA_SP_READY -eq 1 ] && \
+               [ $HPSD_DB_READY -eq 1 ] && [ $HPSD_SP_READY -eq 1 ]; then
+              echo ""
+              echo "✓✓✓ ALL ESSENTIAL SERVICES READY ✓✓✓"
+              break
+            fi
+
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          if [ $ELAPSED -ge $HEALTHCHECK_TIMEOUT ]; then
+            echo ""
+            echo "⚠️  Timeout aguardando ready-strings completos"
+            echo "Status FINAL dos containers:"
+            podman ps -a --format "table {{.Names}}\t{{.Status}}"
+          fi
+
+          echo ""
+          echo "===Validation paths (operational checks)==="
+          echo "Oracle DB (HPSA): 127.0.0.1:41521, system/oracle, SID=xe"
+          echo "Oracle DB (HPSD): 127.0.0.1:31521, c##hpsa/secret"
+          echo "Service Activator (HPSA): curl http://127.0.0.1:8682/ (expect 302)"
+          echo "Service Activator (HPSD): curl http://127.0.0.1:8582/ (expect 302)"
+          echo "MUSE UI: curl http://127.0.0.1:8050/muse-shell/ (expect 200)"
+          echo "WildFly logs: podman logs -f $HPSA_SP_NAME | grep -E '(WFLYSRV0025|ERR)'"
+          echo ""
+          echo "===Resumo de logs (últimas 3 linhas da DB de HPSA)==="
+          if [ -n "$HPSA_DB_NAME" ]; then
+            podman logs --tail 3 "$HPSA_DB_NAME" 2>/dev/null || echo "  (container log unavailable)"
+          else
+            echo "  (HPSA DB container not found)"
+          fi
+
+          echo ""
+          echo "===OPTIONAL: WireMock setup (TMF inventory simulation)==="
+          echo "Expected: 3 WireMock instances on ports 888, 8889, 8890"
+          echo "Location: ~/part2-hpsd/docker/wiremock or extracted from compose"
+          echo "Each needs /mappings folder with stub definitions (HTTP, no TLS)"
+          echo "Verificar se docker-compose.yml inclui WireMock ou rodar separadamente"
+          echo "WireMock version: 3.13.2 (standalone jar)"
+          echo ""
+
+          echo "===sdsp_vivo crash-loop gotcha (se houver reboot)==="
+          echo "Known issue: sdsp_vivo re-executa 01_wait_for_db.sh após reboot"
+          echo "Alternativa 1 (recomendada): procurar ~/part2-hpsd/docker/up.sh"
+          echo "  Se existir, rodar: cd ~/part2-hpsd/docker && ./up.sh (vendor script)"
+          echo "Alternativa 2: mount do overlay (manual fix pós-crash-loop)"
+          echo "  podman unshare podman mount sdsp_vivo && mv 01_wait_for_db.sh"
+          echo "Verificar neste bundle se up.sh está presente — anotado em REBUILD.md"
+          echo ""
+
+          echo "===END PHASE 3==="
+        displayName: "Fase 3: Compose up (HPSA + HPSD com fixes)"
