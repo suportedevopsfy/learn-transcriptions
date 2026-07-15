@@ -28,12 +28,26 @@ jobs:
           echo "BUNDLE_BASE: $(BUNDLE_BASE)"
           echo "BUNDLE_FALLBACK: $(BUNDLE_FALLBACK)"
 
-          # find_bundle <nome> : procura no BASE, senão no FALLBACK. Ecoa o path (ou vazio).
+          # find_bundle <nome> : lista TODAS as cópias (BASE=OneDrive + FALLBACK=user folder
+          # inteiro, inclui Downloads) com hidratação, e retorna (stdout) a 1ª HIDRATADA.
+          # Relatório das candidatas vai pro stderr (aparece no log, sem sujar o retorno).
           find_bundle() {
-            local nome="$1" hit
-            hit=$(find "$(BUNDLE_BASE)" -name "$nome" -type f 2>/dev/null | head -1)
-            [ -z "$hit" ] && hit=$(find "$(BUNDLE_FALLBACK)" -name "$nome" -type f 2>/dev/null | head -1)
-            echo "$hit"
+            local nome="$1" f logical_kb disk_kb chosen="" cands
+            cands=$( { find "$(BUNDLE_BASE)" -name "$nome" -type f 2>/dev/null; \
+                       find "$(BUNDLE_FALLBACK)" -name "$nome" -type f 2>/dev/null; } | awk '!seen[$0]++' )
+            if [ -z "$cands" ]; then echo "  [$nome] NENHUMA cópia encontrada" >&2; echo ""; return; fi
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              logical_kb=$(( $(stat -c %s "$f" 2>/dev/null || echo 0) / 1024 ))
+              disk_kb=$(du -k "$f" 2>/dev/null | cut -f1); disk_kb=${disk_kb:-0}
+              if [ "$logical_kb" -gt 0 ] && [ "$disk_kb" -ge $(( logical_kb * 9 / 10 )) ]; then
+                echo "  [$nome] HIDRATADA  disk_kb=$disk_kb log_kb=$logical_kb  $f" >&2
+                [ -z "$chosen" ] && chosen="$f"
+              else
+                echo "  [$nome] desidrat.  disk_kb=$disk_kb log_kb=$logical_kb  $f" >&2
+              fi
+            done <<< "$cands"
+            echo "$chosen"
           }
 
           # hydrated <path> : 0 (ok) se o arquivo tem blocos REAIS em disco (não é placeholder OneDrive).
