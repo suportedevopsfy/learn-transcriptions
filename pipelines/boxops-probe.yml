@@ -26,8 +26,10 @@ jobs:
           echo "===DISK==="; df -h / /home 2>&1; df -h /mnt/c 2>&1
           echo "===MEM==="; free -h 2>&1; echo "nproc=$(nproc 2>/dev/null)"
           echo "===MNTC==="; ls /mnt/c/Users 2>&1 | head -20
-          echo "===ACCENTURE_DIRS==="; for u in /mnt/c/Users/*/Accenture; do echo "-- $u"; ls "$u" 2>&1 | head; done
-          echo "===BUNDLE==="; timeout 25 find /mnt/c/Users -maxdepth 7 \( -iname 'oraclexe.tar' -o -iname 'sa1_2.tar' -o -iname 'docker1.zip' -o -iname 'all_images_sd1.tar' \) 2>/dev/null | head
+          echo "===ONEDRIVE_ROOTS==="; ls -la "/mnt/c/Users/David Vidal Buena/" 2>&1 | grep -iE "onedrive|accenture" || echo "(nenhum onedrive/accenture no home root)"
+          echo "===OD_ACC_TOP==="; ODACC="/mnt/c/Users/David Vidal Buena/OneDrive - Accenture"; ls -la "$ODACC" 2>&1 | head -40
+          echo "===BUNDLE==="; timeout 90 find "/mnt/c/Users/David Vidal Buena" -maxdepth 8 \( -iname '*.tar' -o -iname '*.zip' -o -iname 'part1*' -o -iname 'part2*' -o -iname '*bundle*' \) 2>/dev/null | head -40
+          echo "===BUNDLE_SIZES==="; timeout 90 find "/mnt/c/Users/David Vidal Buena" -maxdepth 8 \( -iname '*.tar' -o -iname '*.zip' \) 2>/dev/null | head -20 | while read -r f; do printf "logical=%s disk_kb=%s  %s\n" "$(stat -c%s "$f" 2>/dev/null)" "$(du -k "$f" 2>/dev/null | cut -f1)" "$f"; done
           echo "===HOME==="; ls -la ~ 2>&1 | head -30; echo "-- part1"; ls -la ~/part1 2>&1 | head; echo "-- part2-hpsd"; ls -la ~/part2-hpsd 2>&1 | head
           echo "===AGENTDIR==="; echo "PWD=$(pwd)"; echo "AGENT_HOMEDIRECTORY=$AGENT_HOMEDIRECTORY"; echo "AGENT_WORKFOLDER=$AGENT_WORKFOLDER"
           echo "===END==="
