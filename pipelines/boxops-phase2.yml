@@ -10,13 +10,12 @@ pool:
   name: PlatformAg99Lc
 
 variables:
-  # Path onde estão os tars (ajuste conforme estiver materializado no host Windows)
-  # Windows profile pós-reimage: "David Vidal Buena" (COM ESPAÇOS), não "david.vidal.buena"
-  # Procura recursivamente sob a pasta do usuário, suporta OneDrive hidratada/online-only
-  # Se não encontrar: reporta MISSING, não falha a job
-  BUNDLE_BASE: "/mnt/c/Users/David Vidal Buena"
-  HPSA_BUNDLE: "$(BUNDLE_BASE)"
-  HPSD_BUNDLE: "$(BUNDLE_BASE)"
+  # Path REAL confirmado por probe 3801 (2026-07-15): library de time "Engenharia TLF"
+  # sincronizada como atalho no OneDrive - Accenture do perfil "David Vidal Buena".
+  # Apontar direto pra pasta VIVO evita varrer AppData (lento + falsos-positivos .bundle.js).
+  # Fallback: se find não achar aqui, cai pra pasta do usuário inteira.
+  BUNDLE_BASE: "/mnt/c/Users/David Vidal Buena/OneDrive - Accenture/Engenharia TLF - HPSD - Transição e Takeover/07 - Treinamento/01 - VIVO"
+  BUNDLE_FALLBACK: "/mnt/c/Users/David Vidal Buena"
 
 jobs:
   - job: Phase2BundleLoad
@@ -27,52 +26,74 @@ jobs:
           set +e
           echo "===PHASE 2: Bundle Load==="
           echo "BUNDLE_BASE: $(BUNDLE_BASE)"
-          echo "HPSA_BUNDLE: $(HPSA_BUNDLE)"
-          echo "HPSD_BUNDLE: $(HPSD_BUNDLE)"
+          echo "BUNDLE_FALLBACK: $(BUNDLE_FALLBACK)"
+
+          # find_bundle <nome> : procura no BASE, senão no FALLBACK. Ecoa o path (ou vazio).
+          find_bundle() {
+            local nome="$1" hit
+            hit=$(find "$(BUNDLE_BASE)" -name "$nome" -type f 2>/dev/null | head -1)
+            [ -z "$hit" ] && hit=$(find "$(BUNDLE_FALLBACK)" -name "$nome" -type f 2>/dev/null | head -1)
+            echo "$hit"
+          }
+
+          # hydrated <path> : 0 (ok) se o arquivo tem blocos REAIS em disco (não é placeholder OneDrive).
+          # stat -c%s mente (mostra tamanho LÓGICO mesmo desidratado); du mede blocos reais.
+          # Regra: disk_kb precisa ser >= 90% do tamanho lógico p/ considerar hidratado.
+          hydrated() {
+            local f="$1" logical_kb disk_kb
+            [ -f "$f" ] || return 1
+            logical_kb=$(( $(stat -c %s "$f" 2>/dev/null || echo 0) / 1024 ))
+            disk_kb=$(du -k "$f" 2>/dev/null | cut -f1)
+            disk_kb=${disk_kb:-0}
+            echo "    hidratação: disk_kb=$disk_kb logical_kb=$logical_kb"
+            [ "$logical_kb" -gt 0 ] && [ "$disk_kb" -ge $(( logical_kb * 9 / 10 )) ]
+          }
 
           # Criar dirs de trabalho
           mkdir -p ~/part1 ~/part2-hpsd
 
           echo ""
-          echo "===HPSA: Procurar tars (busca recursiva a partir de $(BUNDLE_BASE))==="
+          echo "===HPSA: Procurar + checar hidratação dos tars==="
           EXPECTED_ORACLEXE=5926330368
           EXPECTED_SA1_2=3412847104
+          DEHYDRATED=0
 
-          # Busca recursiva sob a pasta do usuário — suporta OneDrive/subpastas aninhadas
-          HPSA_ORACLEXE=$(find "$(BUNDLE_BASE)" -name "oraclexe.tar" -type f 2>/dev/null | head -1)
-          HPSA_SA1_2=$(find "$(BUNDLE_BASE)" -name "sa1_2.tar" -type f 2>/dev/null | head -1)
+          HPSA_ORACLEXE=$(find_bundle "oraclexe.tar")
+          HPSA_SA1_2=$(find_bundle "sa1_2.tar")
 
-          if [ -n "$HPSA_ORACLEXE" ] && [ -f "$HPSA_ORACLEXE" ]; then
-            SIZE_ORACLEXE=$(stat -c %s "$HPSA_ORACLEXE" 2>/dev/null || echo "0")
+          if [ -n "$HPSA_ORACLEXE" ]; then
             echo "oraclexe.tar encontrado: $HPSA_ORACLEXE"
-            echo "  size: $SIZE_ORACLEXE bytes (esperado: $EXPECTED_ORACLEXE)"
-            if [ "$SIZE_ORACLEXE" -lt "$EXPECTED_ORACLEXE" ]; then
-              echo "  ⚠️  MISSING/PARTIAL: arquivo está desidratado ou corrompido"
+            if hydrated "$HPSA_ORACLEXE"; then
+              echo "  ✓ hidratado"
+            else
+              echo "  ❌ DESIDRATADO (placeholder OneDrive) — hidrate no host: botão direito → 'Sempre manter neste dispositivo'"
+              DEHYDRATED=1
             fi
           else
-            echo "❌ MISSING: oraclexe.tar não encontrado em $(BUNDLE_BASE) ou subpastas"
+            echo "❌ MISSING: oraclexe.tar não encontrado"; DEHYDRATED=1
           fi
 
-          if [ -n "$HPSA_SA1_2" ] && [ -f "$HPSA_SA1_2" ]; then
-            SIZE_SA1_2=$(stat -c %s "$HPSA_SA1_2" 2>/dev/null || echo "0")
+          if [ -n "$HPSA_SA1_2" ]; then
             echo "sa1_2.tar encontrado: $HPSA_SA1_2"
-            echo "  size: $SIZE_SA1_2 bytes (esperado: $EXPECTED_SA1_2)"
-            if [ "$SIZE_SA1_2" -lt "$EXPECTED_SA1_2" ]; then
-              echo "  ⚠️  MISSING/PARTIAL: arquivo está desidratado ou corrompido"
+            if hydrated "$HPSA_SA1_2"; then
+              echo "  ✓ hidratado"
+            else
+              echo "  ❌ DESIDRATADO (placeholder OneDrive) — hidrate no host"
+              DEHYDRATED=1
             fi
           else
-            echo "❌ MISSING: sa1_2.tar não encontrado em $(BUNDLE_BASE) ou subpastas"
+            echo "❌ MISSING: sa1_2.tar não encontrado"; DEHYDRATED=1
           fi
 
           echo ""
-          echo "===HPSA: Copiar tars==="
-          if [ -f "$HPSA_ORACLEXE" ]; then
+          echo "===HPSA: Copiar tars (só se hidratados)==="
+          if [ "$DEHYDRATED" -eq 1 ]; then
+            echo "⏭️  PULANDO cópia/load HPSA — arquivo(s) não hidratado(s). Nada de tar de 0 byte."
+          else
             echo "Copiando oraclexe.tar para ~/part1/ ..."
-            cp "$HPSA_ORACLEXE" ~/part1/ || { echo "FALHA ao copiar oraclexe.tar"; }
-          fi
-          if [ -f "$HPSA_SA1_2" ]; then
+            cp "$HPSA_ORACLEXE" ~/part1/ || echo "FALHA ao copiar oraclexe.tar"
             echo "Copiando sa1_2.tar para ~/part1/ ..."
-            cp "$HPSA_SA1_2" ~/part1/ || { echo "FALHA ao copiar sa1_2.tar"; }
+            cp "$HPSA_SA1_2" ~/part1/ || echo "FALHA ao copiar sa1_2.tar"
           fi
 
           echo ""
@@ -107,27 +128,28 @@ jobs:
           fi
 
           echo ""
-          echo "===HPSD: Procurar docker1.zip (busca recursiva)==="
-          EXPECTED_ZIP=6100000000  # ~6.1 GB (aproximado)
+          echo "===HPSD: Procurar + checar hidratação do docker1.zip==="
+          EXPECTED_ZIP=6549154678  # 6.55 GB — tamanho REAL confirmado por probe 3801
+          HPSD_DEHYDRATED=0
 
-          # Busca recursiva sob a pasta do usuário
-          HPSD_ZIP=$(find "$(BUNDLE_BASE)" -name "docker1.zip" -type f 2>/dev/null | head -1)
+          HPSD_ZIP=$(find_bundle "docker1.zip")
 
-          if [ -n "$HPSD_ZIP" ] && [ -f "$HPSD_ZIP" ]; then
-            SIZE_ZIP=$(stat -c %s "$HPSD_ZIP" 2>/dev/null || echo "0")
+          if [ -n "$HPSD_ZIP" ]; then
             echo "docker1.zip encontrado: $HPSD_ZIP"
-            echo "  size: $SIZE_ZIP bytes (esperado: ~$EXPECTED_ZIP)"
-            if [ "$SIZE_ZIP" -lt 5000000000 ]; then
-              echo "  ⚠️  Arquivo parece desidratado ou truncado"
+            if hydrated "$HPSD_ZIP"; then
+              echo "  ✓ hidratado"
+            else
+              echo "  ❌ DESIDRATADO (placeholder OneDrive) — hidrate no host"
+              HPSD_DEHYDRATED=1
             fi
           else
-            echo "❌ MISSING: docker1.zip não encontrado em $(BUNDLE_BASE) ou subpastas"
+            echo "❌ MISSING: docker1.zip não encontrado"; HPSD_DEHYDRATED=1
           fi
 
           echo ""
-          echo "===HPSD: Descompactar e carregar==="
+          echo "===HPSD: Descompactar e carregar (só se hidratado)==="
           cd ~/part2-hpsd
-          if [ -f "$HPSD_ZIP" ]; then
+          if [ -n "$HPSD_ZIP" ] && [ "$HPSD_DEHYDRATED" -eq 0 ]; then
             echo "Copiando docker1.zip ..."
             cp "$HPSD_ZIP" . || { echo "FALHA ao copiar docker1.zip"; }
             echo "Descompactando docker1.zip ..."
