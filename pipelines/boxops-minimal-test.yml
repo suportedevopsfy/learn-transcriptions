@@ -1,0 +1,15 @@
+name: BoxOps.MinimalTest
+trigger: none
+pr: none
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: MinimalTest
+    timeoutInMinutes: 5
+    steps:
+      - bash: |
+          echo "Agent responding?"
+          date
+          whoami
+        displayName: "Minimal echo test"
