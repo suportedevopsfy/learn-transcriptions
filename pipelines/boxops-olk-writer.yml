@@ -1,0 +1,54 @@
+# BoxOps.OlkWriter — SÓ escreve ~/tools/olk-scan.sh na box (NÃO roda o scan).
+# O scan (leitura do cache de e-mail) o David roda na mão → output fica LOCAL,
+# nada de conteúdo de e-mail no log do ADO. Este job só materializa o script.
+name: BoxOps.OlkWriter.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: OlkWriter
+    timeoutInMinutes: 5
+    steps:
+      - checkout: none
+      - bash: |
+          set -e
+          mkdir -p "$HOME/tools"
+          DEST="$HOME/tools/olk-scan.sh"
+          cat > "$DEST" <<'OLKEOF'
+          #!/usr/bin/env bash
+          # olk-scan.sh — varre o cache LOCAL do novo Outlook (Olk) por VPN/changeme.
+          # 100% local: sem rede, sem pipeline, sem túnel. Read-only.
+          set -uo pipefail
+          OLK="${1:-/mnt/c/Users/David Vidal Buena/AppData/Local/Microsoft/Olk}"
+          if [ ! -d "$OLK" ]; then
+            echo "!! Olk não encontrado: $OLK"
+            echo "   Ache: find /mnt/c/Users -maxdepth 6 -type d -name Olk 2>/dev/null"
+            exit 1
+          fi
+          echo "# Olk: $OLK"
+          mapfile -t STORES < <(find "$OLK" -type f \
+            \( -name '*.ldb' -o -name '*.log' -o -path '*IndexedDB*' -o -path '*Cache_Data*' \
+               -o -name '*.db' -o -name '*.sqlite' \) 2>/dev/null)
+          echo "# stores candidatos: ${#STORES[@]} arquivos"
+          [ "${#STORES[@]}" -eq 0 ] && { echo "!! nenhum store — abra o Outlook e copie o fluxo."; exit 0; }
+          dump() { printf '%s\0' "${STORES[@]}" | xargs -0 -r strings -n "${1:-8}" 2>/dev/null; }
+          echo; echo "===== (1) URLs relevantes (changeme/portal/gateway/reset) ====="
+          dump 8 | grep -aoiE 'https?://[a-z0-9._~:/?#=&%+-]*(changeme|senha|password|reset|vpn|portal|redecorp|tdigital-vivo|gateway|acesso|autoatend|resetsenha)[a-z0-9._~:/?#=&%+-]*' | sort -u | head -40
+          echo; echo "===== (2) assuntos / remetentes (JSON OWA) ====="
+          dump 6 | grep -aoiE '"(subject|from|sender|bodyPreview|preview)"[[:space:]]*:[[:space:]]*"[^"]{0,140}"' | grep -aiE 'vpn|senha|password|changeme|acesso|vivo|duo|anyconnect|reset|credenc|matricul' | sort -u | head -40
+          echo; echo "===== (3) trechos com palavra-chave ====="
+          dump 12 | grep -aiE 'changeme|anyconnect|\bvpn\b|primeiro acesso|first.?logon|trocar.*senha|senha tempor|matricul|formato.*(usu|user|login)|reset de senha|redecorp|autoatendimento|gateway' | sort -u | head -60
+          echo; echo "# FIM. URL changeme em (1); User/senha-temp em (2)/(3). Cole SÓ URL+instrução, nunca a senha."
+          OLKEOF
+          chmod +x "$DEST"
+          echo "=== ESCRITO ==="
+          echo "user=$(whoami)  home=$HOME"
+          echo "path=$DEST"
+          echo "bytes=$(stat -c%s "$DEST" 2>/dev/null)  sha256=$(sha256sum "$DEST" | cut -d' ' -f1)"
+          echo "sintaxe: $(bash -n "$DEST" && echo OK || echo ERRO)"
+          echo "=== rode manualmente:  bash $DEST ==="
+        displayName: "escreve ~/tools/olk-scan.sh (NÃO roda o scan)"
