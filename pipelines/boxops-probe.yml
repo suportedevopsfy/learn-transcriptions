@@ -1,6 +1,5 @@
-# BoxOps.Probe.Ag99Lc — ONE-SHOT: liga NOPASSWD pro adam usando a senha via sudo -S.
-# A senha chega como variavel de build (SUDO_PW, passada no queue-time, NAO esta neste YAML).
-# Nunca e impressa: so entra em `sudo -S` via stdin. Depois deste job, sudo sem senha.
+# BoxOps.Probe.Ag99Lc — smoke test de root sem senha (pos-NOPASSWD).
+# Prova root real: whoami, escreve/le em /root (so-root), e checa dnf. Limpa no fim.
 name: BoxOps.Probe.Ag99Lc
 
 trigger: none
@@ -9,38 +8,27 @@ pr: none
 pool:
   name: PlatformAg99Lc
 
-# SUDO_PW vem da definition (marcada settable-at-queue + secret via `ado.py prepvar`),
-# setada no queue-time. NAO declarada aqui de proposito — o valor nunca toca o YAML/repo.
-
 jobs:
-  - job: EnableNopasswd
+  - job: RootSmoke
     timeoutInMinutes: 10
     steps:
       - checkout: none
       - bash: |
           set +e
-          # nao usar set -x (evita vazar SUDO_PW nos logs)
-          if [ -z "$SUDO_PW" ]; then echo "SUDO_PW MISSING — abortando"; exit 3; fi
-          echo "SUDO_PW: presente (len=${#SUDO_PW})"
+          echo "===WHOAMI==="
+          echo "user normal: $(whoami)"
+          echo "via sudo -n: $(sudo -n whoami 2>&1)"
+          echo "id via sudo: $(sudo -n id 2>&1)"
 
-          echo "===TEST_SUDO==="
-          printf '%s\n' "$SUDO_PW" | sudo -S -k true 2>/dev/null \
-            && echo "sudo OK (senha aceita)" \
-            || { echo "sudo FAIL — senha errada ou adam sem sudo"; exit 4; }
+          echo "===ROOT_WRITE (/root e so-root)==="
+          sudo -n bash -c 'echo "boxops root proof $(date -u +%FT%TZ)" > /root/boxops-proof.txt && cat /root/boxops-proof.txt'
+          echo "exit=$?"
 
-          echo "===WRITE_SUDOERS==="
-          printf '%s\n' "$SUDO_PW" | sudo -S -k bash -c '
-            echo "adam ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/adam
-            chmod 440 /etc/sudoers.d/adam
-            visudo -c -f /etc/sudoers.d/adam
-          ' && echo "sudoers escrito+validado" || { echo "falha ao escrever sudoers"; exit 5; }
+          echo "===DNF==="
+          command -v dnf && sudo -n dnf --version 2>&1 | head -2
 
-          echo "===VERIFY_NOPASSWD==="
-          sudo -k
-          sudo -n true 2>&1 && echo "NOPASSWD ATIVO (sudo sem senha funciona)" \
-            || echo "NOPASSWD nao pegou"
+          echo "===CLEANUP==="
+          sudo -n rm -f /root/boxops-proof.txt && echo "removido"
 
           echo "===END==="
-        displayName: "Enable NOPASSWD sudo (one-shot)"
-        env:
-          SUDO_PW: $(SUDO_PW)   # secret precisa de mapeamento explicito; ADO mascara o valor
+        displayName: "Root smoke test (NOPASSWD)"
