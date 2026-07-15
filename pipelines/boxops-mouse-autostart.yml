@@ -1,0 +1,65 @@
+# BoxOps.MouseAutostart.Ag99Lc — persiste o Barrier CLIENT no logon do host Accenture.
+# Padrão IGUAL ao autostart do agente: launcher .vbs na pasta Startup (SEM admin, sem
+# Scheduled Task elevado). barrierc sobe hidden com --restart (reconecta sozinho).
+# Roda via WSL interop (powershell.exe do host, contexto do usuário — não-elevado).
+# NÃO é o túnel; outbound-only pro LAN de casa (192.168.1.50).
+#
+# ⚠️ Persistência de input-remoto em máquina corporativa = ação opt-in do user.
+#    Enfileirar só quando o David quiser LIGAR a persistência.
+name: BoxOps.MouseAutostart.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: MouseAutostart
+    timeoutInMinutes: 10
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          PS="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+          DEST_WSL="/mnt/c/Users/David Vidal Buena/AppData/Local/Temp/mouse-autostart.ps1"
+          DEST_WIN='C:\Users\David Vidal Buena\AppData\Local\Temp\mouse-autostart.ps1'
+          cat > "$DEST_WSL" <<'PSEOF'
+          $ErrorActionPreference='Continue'
+          $Screen='AP1943197841653'; $Server='192.168.1.50'; $Port=24800
+          $FP='v2:sha256:d2768ea390b3e7150b04da64e5fce527ca7a9f85aa400642454840fce33e5d53'
+          $Exe='C:\Program Files\Barrier\barrierc.exe'
+          if(-not (Test-Path $Exe)){ Write-Output 'ERRO: barrierc ausente'; exit 1 }
+
+          # (1) fingerprint confiada (idempotente) — sem isso o TLS cai sem explicacao.
+          $fpDir=Join-Path $env:LOCALAPPDATA 'Barrier\SSL\Fingerprints'
+          New-Item -ItemType Directory -Force -Path $fpDir | Out-Null
+          $fpFile=Join-Path $fpDir 'TrustedServers.txt'
+          $cur=@(); if(Test-Path $fpFile){ $cur=@(Get-Content $fpFile | Where-Object { $_.Trim() -ne '' }) }
+          if($cur -notcontains $FP){ Set-Content -Path $fpFile -Value (@($cur)+$FP) -Encoding ascii; Write-Output 'fingerprint: gravada' } else { Write-Output 'fingerprint: ja confiada' }
+
+          # (2) launcher .vbs na pasta Startup (roda no logon, hidden, sem admin).
+          #     --restart faz o barrierc reconectar sozinho se cair.
+          $startup=[Environment]::GetFolderPath('Startup')
+          $vbs=Join-Path $startup 'mouse-client.vbs'
+          $args='--no-tray --restart --debug INFO --name ' + $Screen + ' --enable-crypto ' + $Server + ':' + $Port
+          $line='CreateObject("WScript.Shell").Run """' + $Exe + '"" ' + $args + '", 0, False'
+          Set-Content -Path $vbs -Value $line -Encoding ascii
+          if(Test-Path $vbs){ Write-Output ('autostart: gravado em ' + $vbs) } else { Write-Output 'autostart: FALHA ao gravar .vbs' }
+          Write-Output ('  cmd: ' + $Exe + ' ' + $args)
+
+          # (3) subir AGORA tambem (para nao esperar o proximo logon), se ainda nao estiver.
+          $p=Get-Process barrierc -ErrorAction SilentlyContinue
+          if($p){ Write-Output ('barrierc: ja RODANDO pid=' + ($p.Id -join ',')) }
+          else {
+            try { Start-Process -FilePath $Exe -ArgumentList $args -WindowStyle Hidden; Write-Output 'barrierc: iniciado agora (Start-Process)' }
+            catch { Write-Output ('start: WARN ' + $_.Exception.Message) }
+            Start-Sleep 5
+            $p2=Get-Process barrierc -ErrorAction SilentlyContinue
+            if($p2){ Write-Output ('barrierc: RODANDO pid=' + ($p2.Id -join ',')) } else { Write-Output 'barrierc: NAO subiu' }
+          }
+          PSEOF
+          echo "=== script escrito, invocando no host ==="
+          "$PS" -NoProfile -ExecutionPolicy Bypass -File "$DEST_WIN" 2>&1 | tr -d '\000\r'
+          echo "=== FIM ==="
+        displayName: "Barrier autostart (Startup .vbs, host via interop)"
