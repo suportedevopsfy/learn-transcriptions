@@ -60,7 +60,8 @@ jobs:
           else
             echo "/etc/wsl.conf já tem systemd=true"
           fi
-          loginctl enable-linger "$(whoami)" 2>&1 || true
+          sudo loginctl enable-linger adam 2>&1 || sudo systemctl start systemd-logind 2>&1 || echo "WARN: enable-linger falhou"
+          sudo loginctl enable-linger adam >/dev/null 2>&1 || true
 
           echo "===SDKMAN + JDK11 + MAVEN + WIREMOCK==="
           # Non-interactive SDKMAN install
@@ -117,13 +118,13 @@ jobs:
           echo "Instalando/preparando WireMock 3.13.2..."
           mkdir -p ~/tools
           if [ ! -f ~/tools/wiremock-3.13.2-standalone.jar ]; then
-            WM_URL="https://repo1.maven.org/maven2/com/github/tomakehurst/wiremock-jre8-standalone/3.13.2/wiremock-jre8-standalone-3.13.2.jar"
+            WM_URL="https://repo1.maven.org/maven2/org/wiremock/wiremock-standalone/3.13.2/wiremock-standalone-3.13.2.jar"
             echo "Baixando WireMock de $WM_URL..."
-            curl -fL "$WM_URL" -o ~/tools/wiremock-3.13.2-standalone.jar 2>&1 | tail -3
-            if [ $? -ne 0 ]; then
-              echo "WARN: WireMock download falhou"; FAILED=$((FAILED+1))
+            curl -fsSL "$WM_URL" -o ~/tools/wiremock-3.13.2-standalone.jar
+            if [ -s ~/tools/wiremock-3.13.2-standalone.jar ]; then
+              echo "WireMock baixado: $(du -h ~/tools/wiremock-3.13.2-standalone.jar | cut -f1)"
             else
-              echo "WireMock baixado com sucesso"
+              echo "WARN: WireMock download falhou"; FAILED=$((FAILED+1)); rm -f ~/tools/wiremock-3.13.2-standalone.jar
             fi
           else
             echo "WireMock jar já existe em ~/tools/"
