@@ -1,5 +1,6 @@
-# BoxOps.Probe.Ag99Lc — smoke test de root sem senha (pos-NOPASSWD).
-# Prova root real: whoami, escreve/le em /root (so-root), e checa dnf. Limpa no fim.
+# BoxOps.Probe.Ag99Lc — instala e sobe o sshd na box (a ponta que falta pro tunnel).
+# Root via NOPASSWD. authorized_keys do adam = pubkey headscale_oracle (o que o 'ssh accenture' usa).
+# Pubkey NAO e sigilo. Depois disto, o tunnel forwarda bastion:12340 -> box:22 e loga como adam.
 name: BoxOps.Probe.Ag99Lc
 
 trigger: none
@@ -9,26 +10,40 @@ pool:
   name: PlatformAg99Lc
 
 jobs:
-  - job: RootSmoke
-    timeoutInMinutes: 10
+  - job: InstallSshd
+    timeoutInMinutes: 15
     steps:
       - checkout: none
       - bash: |
           set +e
-          echo "===WHOAMI==="
-          echo "user normal: $(whoami)"
-          echo "via sudo -n: $(sudo -n whoami 2>&1)"
-          echo "id via sudo: $(sudo -n id 2>&1)"
+          PUB='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBSev6zunAXu6DFgmTCg6VOpV9pHSytoT4+hZjLfgO2y headscale-oracle'
 
-          echo "===ROOT_WRITE (/root e so-root)==="
-          sudo -n bash -c 'echo "boxops root proof $(date -u +%FT%TZ)" > /root/boxops-proof.txt && cat /root/boxops-proof.txt'
-          echo "exit=$?"
+          echo "===INSTALL==="
+          sudo -n dnf install -y openssh-server 2>&1 | tail -3
+          echo "install_exit=${PIPESTATUS[0]}"
 
-          echo "===DNF==="
-          command -v dnf && sudo -n dnf --version 2>&1 | head -2
+          echo "===HOSTKEYS==="
+          sudo -n ssh-keygen -A 2>&1 && echo "host keys ok"
 
-          echo "===CLEANUP==="
-          sudo -n rm -f /root/boxops-proof.txt && echo "removido"
+          echo "===AUTHORIZED_KEYS (adam)==="
+          install -d -m 700 -o adam -g adam /home/adam/.ssh
+          # idempotente: so adiciona se ainda nao estiver
+          grep -qF "$PUB" /home/adam/.ssh/authorized_keys 2>/dev/null || echo "$PUB" >> /home/adam/.ssh/authorized_keys
+          chmod 600 /home/adam/.ssh/authorized_keys; chown adam:adam /home/adam/.ssh/authorized_keys
+          echo "linhas em authorized_keys: $(wc -l < /home/adam/.ssh/authorized_keys)"
+
+          echo "===START_SSHD==="
+          sudo -n systemctl enable --now sshd 2>&1
+          echo "enable_exit=$?"
+          sudo -n systemctl is-active sshd 2>&1
+          sudo -n systemctl is-enabled sshd 2>&1
+
+          echo "===LISTEN :22==="
+          (command -v ss >/dev/null && sudo -n ss -tlnp | grep ':22 ') || sudo -n netstat -tlnp 2>/dev/null | grep ':22 ' || echo "(nada em :22?)"
+
+          echo "===SELF_TEST (loopback, aceita a chave?)==="
+          # so confirma que sshd responde banner; auth real vem pelo tunnel
+          timeout 5 bash -c 'echo > /dev/tcp/127.0.0.1/22' 2>&1 && echo "porta 22 aceita conexao TCP" || echo "22 nao respondeu"
 
           echo "===END==="
-        displayName: "Root smoke test (NOPASSWD)"
+        displayName: "Install + start sshd on box (tunnel endpoint)"
