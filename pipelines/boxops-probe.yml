@@ -27,7 +27,7 @@ jobs:
           echo "===MEM==="; free -h 2>&1; echo "nproc=$(nproc 2>/dev/null)"
           echo "===MNTC==="; ls /mnt/c/Users 2>&1 | head -20
           echo "===ACCENTURE_DIRS==="; for u in /mnt/c/Users/*/Accenture; do echo "-- $u"; ls "$u" 2>&1 | head; done
-          echo "===WINHOST==="; PS="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"; timeout 20 "$PS" -NoProfile -Command 'Write-Output "COMPUTERNAME=$env:COMPUTERNAME"; Write-Output ("IPs=" + ((Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {$_.IPAddress -like \"192.168.*\"}).IPAddress -join \",\"))' 2>&1 | head -6
+          echo "===WINHOST==="; PS="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"; echo -n "COMPUTERNAME="; timeout 15 "$PS" -NoProfile -Command '$env:COMPUTERNAME' 2>&1 | tr -d '\r' | head -1; echo "-- ipv4 192.168 --"; timeout 15 "$PS" -NoProfile -Command 'ipconfig' 2>&1 | tr -d '\r' | grep -i "IPv4" | head -6
           echo "===BUNDLE==="; timeout 25 find /mnt/c/Users -maxdepth 7 \( -iname 'oraclexe.tar' -o -iname 'sa1_2.tar' -o -iname 'docker1.zip' -o -iname 'all_images_sd1.tar' \) 2>/dev/null | head
           echo "===HOME==="; ls -la ~ 2>&1 | head -30; echo "-- part1"; ls -la ~/part1 2>&1 | head; echo "-- part2-hpsd"; ls -la ~/part2-hpsd 2>&1 | head
           echo "===AGENTDIR==="; echo "PWD=$(pwd)"; echo "AGENT_HOMEDIRECTORY=$AGENT_HOMEDIRECTORY"; echo "AGENT_WORKFOLDER=$AGENT_WORKFOLDER"
