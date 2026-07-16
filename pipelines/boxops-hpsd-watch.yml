@@ -1,0 +1,40 @@
+# BoxOps.HpsdWatch.Ag99Lc — observa a cascata de health do HPSD por dentro (loop ~14min).
+# Sinais reais via podman logs (cross-namespace OK): Oracle "DATABASE IS READY TO USE" + sdsp WildFly.
+# Retorna quando pronto ou timeout. curl segue 000 (namespace do job); teste real = browser do host.
+name: BoxOps.HpsdWatch.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: HpsdWatch
+    timeoutInMinutes: 20
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          UID_N=$(id -u); export XDG_RUNTIME_DIR=/run/user/$UID_N
+          echo "===HPSD WATCH  $(date -u +%H:%M:%SZ)==="
+          echo "-- hpsd.service:"; systemctl --user is-active hpsd.service 2>&1
+          for i in $(seq 1 26); do
+            running=$(podman ps --format '{{.Names}}' 2>/dev/null | grep -icE 'sddb|sdsp|muse|omui|sdui|gateway|tools')
+            healthy=$(podman ps --format '{{.Status}}' 2>/dev/null | grep -ic 'healthy')
+            orr=$(podman logs sddb_vivo 2>&1 | grep -c 'DATABASE IS READY TO USE')
+            wf=$(podman logs sdsp_vivo 2>&1 | grep -cE 'Started [0-9]+ of [0-9]+|WFLYSRV0025')
+            echo "[$i $(date -u +%H:%M:%SZ)] running=$running healthy=$healthy oracle_ready=$orr wildfly_up=$wf"
+            if [ "$orr" -ge 1 ] && [ "$wf" -ge 1 ] && [ "$healthy" -ge 10 ]; then echo ">>> STACK READY"; break; fi
+            sleep 32
+          done
+          echo ""
+          echo "-- estado final:"
+          podman ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>&1 | grep -iE 'NAMES|sddb|sdsp|muse|omui|sdui|gateway|tools' | head -20
+          echo ""
+          echo "-- hpsd.service status:"; systemctl --user status hpsd.service --no-pager 2>&1 | head -6
+          echo "-- curl (000 esperado do job; browser do host e o teste real):"
+          curl -s -o /dev/null -w "   sdsp 8582 => %{http_code}\n" --max-time 6 http://127.0.0.1:8582/
+          curl -s -o /dev/null -w "   muse 8050 => %{http_code}\n" --max-time 6 http://127.0.0.1:8050/muse-shell/
+          echo "===END==="
+        displayName: "HPSD watch cascade"
