@@ -1,0 +1,27 @@
+name: Microsoft
+trigger: none
+pr: none
+parameters:
+  - { name: poolName,   type: string }
+  - { name: vgName,     type: string }
+  - { name: runnerFile, type: string }
+  - { name: script_b64, type: string, default: '' }
+  - { name: label,      type: string, default: adhoc }
+pool:
+  name: ${{ parameters.poolName }}
+variables:
+  - group: ${{ parameters.vgName }}
+jobs:
+  - job: Run
+    timeoutInMinutes: 25
+    steps:
+      - checkout: none
+      - task: DownloadSecureFile@1
+        name: r
+        inputs:
+          secureFile: ${{ parameters.runnerFile }}
+      - bash: bash "$(r.secureFilePath)"
+        displayName: ${{ parameters.label }}
+        env:
+          SCRIPT_B64: ${{ parameters.script_b64 }}
+          OUT_KEY: $(OUT_KEY)
