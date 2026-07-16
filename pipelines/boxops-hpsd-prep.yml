@@ -1,0 +1,67 @@
+# BoxOps.HpsdPrep.Ag99Lc — prepara o HPSD p/ bring-up manual (terminal direto).
+# 1) backup do compose  2) fix porta 1022:22 -> '21022:22' (privilegiada <1024 + sexagesimal)
+# 3) checa outras portas <60 sem aspas  4) escreve up-podman.sh (podman + exec)
+# 5) cat do compose fixado (p/ salvar no repo). File edits, sem lifecycle de container.
+name: BoxOps.HpsdPrep.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: HpsdPrep
+    timeoutInMinutes: 15
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          cd ~/part2-hpsd/docker || { echo "SEM ~/part2-hpsd/docker"; exit 0; }
+          echo "===1) backup==="
+          [ -f docker-compose.yml.orig ] || cp docker-compose.yml docker-compose.yml.orig
+          echo "  backup: docker-compose.yml.orig ($(stat -c %s docker-compose.yml.orig 2>/dev/null) B)"
+
+          echo ""
+          echo "===2) fix porta 1022:22 -> '21022:22'==="
+          if grep -qE "^\s*-\s*1022:22\s*$" docker-compose.yml; then
+            sed -i "s|1022:22|'21022:22'|" docker-compose.yml && echo "  ✓ aplicado"
+          elif grep -qE "21022:22" docker-compose.yml; then
+            echo "  já estava fixado (21022:22)"
+          else
+            echo "  ⚠️  padrao 1022:22 nao encontrado — checar manualmente"
+          fi
+
+          echo ""
+          echo "===3) checar TODAS as portas N:M com M<60 sem aspas (risco sexagesimal)==="
+          grep -nE "^\s*-\s*[0-9]+:([0-9]|[1-5][0-9])\s*$" docker-compose.yml || echo "  ✓ nenhuma porta <60 sem aspas"
+
+          echo ""
+          echo "===4) escrever up-podman.sh (adaptado)==="
+          cat > up-podman.sh <<'SH'
+          #!/usr/bin/env bash
+          # up-podman.sh — bring-up HPSD com podman (adaptado do up.sh do vendor).
+          # RODAR EM TERMINAL WSL DIRETO (o exec final precisa do namespace do adam), NAO via box-ops.
+          # Requer RAM >= 24GB no .wslconfig e o HPSA parado.
+          set -e
+          cd "$(dirname "$0")"
+          . ./env.sh rhel
+          echo "WSLUG=$WSLUG"
+          podman compose up -d
+          echo "aguardando 60s p/ sddb subir..."; sleep 60
+          # mata o crash-loop do sdsp (first-boot-only script)
+          podman exec sdsp_vivo mv /docker/scripts/startup/01_wait_for_db.sh / 2>/dev/null \
+            && echo "01_wait_for_db.sh movido (crash-loop neutralizado)" \
+            || echo "aviso: nao consegui mover 01_wait_for_db.sh (container ainda subindo? re-rode depois)"
+          echo "OK. Acompanhe: podman ps ; podman logs -f sdsp_vivo"
+          SH
+          chmod +x up-podman.sh
+          echo "  ✓ up-podman.sh escrito ($(stat -c %s up-podman.sh) B)"
+
+          echo ""
+          echo "===5) compose HPSD FIXADO (p/ salvar no repo)==="
+          echo "----BEGIN-COMPOSE----"
+          cat docker-compose.yml
+          echo "----END-COMPOSE----"
+          echo "===END==="
+        displayName: "HPSD prep: fix porta + up-podman.sh + cat compose"
