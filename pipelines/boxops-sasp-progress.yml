@@ -1,0 +1,46 @@
+# BoxOps.SaspProgress.Ag99Lc — read-only. Mede se o log do sasp esta CRESCENDO (2 amostras
+# com 75s de intervalo), procura ERROR/Exception/OOM/Started, RAM e stats. So logs/inspect
+# (cross-namespace ok); sem exec. Sempre verde.
+name: BoxOps.SaspProgress.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: SaspProgress
+    timeoutInMinutes: 15
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          SASP=$(podman ps -a --format '{{.Names}}' | grep -i sasp | head -1)
+          echo "sasp=$SASP"
+          echo "===amostra 1==="
+          L1=$(podman logs "$SASP" 2>&1 | wc -l); echo "log_lines_1=$L1"
+          B1=$(podman logs "$SASP" 2>&1 | wc -c); echo "log_bytes_1=$B1"
+          echo "RAM:"; free -h 2>&1 | head -2
+          echo "sleep 75s..."; sleep 75
+          echo "===amostra 2==="
+          L2=$(podman logs "$SASP" 2>&1 | wc -l); echo "log_lines_2=$L2"
+          B2=$(podman logs "$SASP" 2>&1 | wc -c); echo "log_bytes_2=$B2"
+          echo "DELTA linhas=$((L2-L1))  bytes=$((B2-B1))"
+          if [ "$((B2-B1))" -gt 0 ]; then echo ">>> LOG CRESCENDO (deploy progride, so lento)"; else echo ">>> LOG PARADO (estagnado)"; fi
+
+          echo ""
+          echo "===erros / markers no log inteiro==="
+          echo "-- ERROR/Exception/OOM (ultimos 20):"
+          podman logs "$SASP" 2>&1 | grep -aiE 'error|exception|out of memory|outofmemory|fatal|cannot|failed|refused|timeout|deadlock|ORA-' | tail -20
+          echo "-- WildFly started?:"
+          podman logs "$SASP" 2>&1 | grep -aE 'WFLYSRV0025|Started [0-9]+ of [0-9]+|WFLYSRV0010|Deployed' | tail -10
+          echo "-- ultimas 8 linhas AGORA:"
+          podman logs "$SASP" 2>&1 | tail -8
+
+          echo ""
+          echo "===inspect==="
+          podman inspect "$SASP" --format 'status={{.State.Status}} started={{.State.StartedAt}} restarts={{.RestartCount}} oom={{.State.OOMKilled}}' 2>&1
+          echo "-- RAM final:"; free -h 2>&1 | head -2
+          echo "===END==="
+        displayName: "sasp progress (log growing?) read-only"
