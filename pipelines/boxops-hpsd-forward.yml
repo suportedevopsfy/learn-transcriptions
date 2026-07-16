@@ -29,16 +29,17 @@ jobs:
           mkdir -p ~/part2-hpsd/docker ~/.config/systemd/user
           cat > ~/part2-hpsd/docker/hpsd-ctl.sh <<'CTL'
           #!/usr/bin/env bash
-          # controla so os containers do stack HPSD (exclui part1_* do HPSA)
+          # controla o stack HPSD via `podman compose` (respeita depends_on → recria forwarders em ordem).
           set +e
-          sel() { podman ps -a --format '{{.Names}}' | grep -iE 'sddb_vivo|sdsp_vivo|^tools$|^sdui$|sdui-plugin|omuiplugin_vivo|museomui_vivo|muse-(auth|registry|config|notif|shell|gateway)_vivo'; }
-          C=$(sel | tr '\n' ' ')
+          DIR=~/part2-hpsd/docker
+          cd "$DIR" || exit 1
+          . ./env.sh rhel 2>/dev/null   # WSLUG p/ extra_hosts do compose
           case "$1" in
-            up)       [ -n "$C" ] && podman restart $C ;;   # restart: recria forwarders (running->fresh, stopped->start)
-            start)    [ -n "$C" ] && podman start $C ;;
-            stop)     [ -n "$C" ] && podman stop -t 30 $C ;;
-            restart)  [ -n "$C" ] && podman restart $C ;;
-            list)     echo "$C" ;;
+            up)       podman compose up -d; sleep 3; podman compose restart ;;  # cura (start em ordem) + recria forwarders em ordem
+            start)    podman compose up -d ;;
+            stop)     podman compose stop ;;
+            restart)  podman compose restart ;;
+            list)     podman compose ps --format '{{.Names}}' ;;
             *)        echo "uso: hpsd-ctl.sh {up|start|stop|restart|list}" ;;
           esac
           CTL
