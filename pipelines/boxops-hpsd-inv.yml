@@ -1,0 +1,59 @@
+# BoxOps.HpsdInv.Ag99Lc — read-only. Inventario HPSD: imagens presentes vs. exigidas pelo
+# compose, tars extras no ~/part2-hpsd/docker, env.sh/up.sh, dirs de suporte. Decide se o
+# HPSD-full e viavel offline. Sem tunel. Sempre verde.
+name: BoxOps.HpsdInv.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: HpsdInv
+    timeoutInMinutes: 15
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===TODAS as imagens no podman==="
+          podman images --format '{{.Repository}}:{{.Tag}}  {{.Size}}' 2>&1 | sort
+
+          echo ""
+          echo "===Imagens EXIGIDAS pelo compose HPSD vs presentes==="
+          COMPOSE=~/part2-hpsd/docker/docker-compose.yml
+          # extrai as linhas image: do compose
+          REQ=$(grep -E '^\s*image:' "$COMPOSE" 2>/dev/null | sed -E 's/^\s*image:\s*//' | tr -d '"' | sort -u)
+          echo "$REQ" | while IFS= read -r img; do
+            [ -n "$img" ] || continue
+            # normaliza: se nao tem tag, podman image exists pode falhar; tenta direto
+            if podman image exists "$img" 2>/dev/null; then
+              echo "  ✓ PRESENTE  $img"
+            else
+              echo "  ✗ FALTA     $img"
+            fi
+          done
+
+          echo ""
+          echo "===tars/zip dentro de ~/part2-hpsd (imagens ainda p/ carregar?)==="
+          find ~/part2-hpsd -maxdepth 3 -iname '*.tar' -o -iname '*.tar.gz' -o -iname '*.zip' 2>/dev/null | while read -r f; do
+            echo "  $(du -h "$f" 2>/dev/null | cut -f1)  $f"
+          done
+          echo "-- conteudo de ~/part2-hpsd/docker/ (dir):"
+          ls -la ~/part2-hpsd/docker/ 2>&1 | head -40
+
+          echo ""
+          echo "===env.sh (completo)==="
+          cat ~/part2-hpsd/docker/env.sh 2>&1 | head -80
+
+          echo ""
+          echo "===up.sh (completo)==="
+          cat ~/part2-hpsd/docker/up.sh 2>&1 | head -80
+
+          echo ""
+          echo "===dirs de suporte referenciados (db-startup, training, external)==="
+          for d in db-startup training external ../part2-hpsd; do
+            echo "-- ~/part2-hpsd/docker/$d:"; ls -la ~/part2-hpsd/docker/$d 2>&1 | head -8
+          done
+          echo "===END==="
+        displayName: "HPSD inventory (imagens/env/up) read-only"
