@@ -1,0 +1,46 @@
+# BoxOps.StartBarrier.Ag99Lc — SO escreve start-barrier.ps1 no host (NAO roda).
+# Deixa o script headless de start do Barrier client pronto em Temp, pro David testar.
+# Nome honesto (start-barrier.ps1). Roda via WSL interop (contexto do usuario).
+# NAO faz Start-Process — apenas grava o arquivo e confirma.
+name: BoxOps.StartBarrier.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: StartBarrierDrop
+    timeoutInMinutes: 10
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          DEST_WSL="/mnt/c/Users/David Vidal Buena/AppData/Local/Temp/start-barrier.ps1"
+          DEST_WIN='C:\Users\David Vidal Buena\AppData\Local\Temp\start-barrier.ps1'
+          cat > "$DEST_WSL" <<'PSEOF'
+          # start-barrier.ps1 - sobe o Barrier client (headless, nao-persistente).
+          $ErrorActionPreference='Continue'
+          $Screen='AP1943197841653'; $Server='192.168.1.50'; $Port=24800
+          $Exe='C:\Program Files\Barrier\barrierc.exe'
+          if(-not (Test-Path $Exe)){ Write-Output 'ERRO: barrierc ausente em C:\Program Files\Barrier'; exit 1 }
+          $fpDir=Join-Path $env:LOCALAPPDATA 'Barrier\SSL\Fingerprints'
+          New-Item -ItemType Directory -Force -Path $fpDir | Out-Null
+          $fpFile=Join-Path $fpDir 'TrustedServers.txt'
+          $FP='v2:sha256:d2768ea390b3e7150b04da64e5fce527ca7a9f85aa400642454840fce33e5d53'
+          $cur=@(); if(Test-Path $fpFile){ $cur=@(Get-Content $fpFile | Where-Object {$_.Trim()}) }
+          if($cur -notcontains $FP){ Set-Content -Path $fpFile -Value (@($cur)+$FP) -Encoding ascii; Write-Output 'fingerprint: gravada' } else { Write-Output 'fingerprint: ja confiada' }
+          Start-Process -FilePath $Exe -ArgumentList ('--no-tray --restart --debug INFO --name '+$Screen+' --enable-crypto '+$Server+':'+$Port) -WindowStyle Hidden
+          Start-Sleep 5
+          $p=Get-Process barrierc -ErrorAction SilentlyContinue
+          if($p){ Write-Output ('barrierc RODANDO pid='+($p.Id -join ',')) } else { Write-Output 'barrierc NAO subiu (BeyondTrust bloqueou?)' }
+          PSEOF
+          if [ -f "$DEST_WSL" ]; then
+            echo "ESCRITO: $DEST_WIN"
+            echo "--- bytes: $(wc -c < "$DEST_WSL") ---"
+          else
+            echo "FALHA ao escrever $DEST_WIN"
+          fi
+          echo "=== FIM (arquivo so gravado, NAO executado) ==="
+        displayName: "Drop start-barrier.ps1 no host (sem rodar)"
