@@ -1,0 +1,49 @@
+# BoxOps.SaspDetail.Ag99Lc — read-only diagnostico do sasp (SA/WildFly): esta progredindo
+# ou travado? Processos java, tail grande do log, WFLYSRV markers, deploy status, porta 8080
+# dentro do container. Sem tunel. Sempre verde.
+name: BoxOps.SaspDetail.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: SaspDetail
+    timeoutInMinutes: 15
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          SASP=$(podman ps -a --format '{{.Names}}' | grep -i sasp | head -1)
+          SADB=$(podman ps -a --format '{{.Names}}' | grep -i sadb | head -1)
+          echo "===CONTAINERS==="
+          podman ps -a --format 'table {{.Names}}\t{{.Status}}' 2>&1 | grep -iE 'NAMES|sadb|sasp'
+          echo "sasp=$SASP  sadb=$SADB"
+          [ -z "$SASP" ] && { echo "SEM sasp — abortando"; exit 0; }
+
+          echo ""
+          echo "===sasp: processos (java rodando?)==="
+          podman exec "$SASP" bash -lc 'ps -ef 2>/dev/null | grep -iE "java|wildfly|jboss|standalone" | grep -v grep | head' 2>&1 | head
+
+          echo ""
+          echo "===sasp: porta 8080 escutando DENTRO do container?==="
+          podman exec "$SASP" bash -lc '(ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | grep -E ":8080|:8682" || echo "  8080 NAO escuta ainda"' 2>&1 | head
+
+          echo ""
+          echo "===sasp: WFLYSRV markers (boot/deploy)==="
+          podman logs "$SASP" 2>&1 | grep -aE 'WFLYSRV[0-9]+|Started [0-9]+ of [0-9]+|Deployed|deployment|ERROR|FATAL|Exception' | tail -25
+
+          echo ""
+          echo "===sasp: TAIL 40 do log (o que esta fazendo agora)==="
+          podman logs "$SASP" 2>&1 | tail -40
+
+          echo ""
+          echo "===sasp: /var/log do activator + jboss (se montados)==="
+          ls -la ~/part1/logs/sp/activator 2>&1 | head
+          ls -la ~/part1/logs/sp/wildfly 2>&1 | head
+          echo "-- tail activator boot.log se existir:"
+          find ~/part1/logs/sp -name '*.log' 2>/dev/null | head -3 | while read -r f; do echo "== $f =="; tail -15 "$f"; done
+          echo "===END==="
+        displayName: "sasp detail (read-only)"
