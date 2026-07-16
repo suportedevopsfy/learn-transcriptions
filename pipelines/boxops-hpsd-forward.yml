@@ -1,8 +1,6 @@
-# BoxOps.HpsdForward.Ag99Lc — instala um user systemd service dono do stack HPSD e tenta subir os
-# port-forwarders sob o USER MANAGER PERSISTENTE (linger), nao sob o job box-ops (que os mata no cleanup).
-# Se o job alcancar o manager persistente (XDG_RUNTIME_DIR=/run/user/UID) → forwarders sobem zero-touch
-# e sobrevivem a reboot. Se NAO alcancar → a unit fica instalada; David sobe com 1 comando.
-# Idempotente, nao-destrutivo, sempre verde.
+# BoxOps.HpsdForward.Ag99Lc — force-clean (via manager) + subida EM ESTAGIOS com o mv do crash-loop
+# do sdsp (logica do vendor up-podman.sh). Tudo sob o systemd --user persistente → forwarders sobrevivem.
+# Estagios: Oracle healthy → sdsp + `podman exec mv 01_wait_for_db.sh` enquanto roda → resto do stack.
 name: BoxOps.HpsdForward.Ag99Lc
 
 trigger: none
@@ -13,44 +11,62 @@ pool:
 
 jobs:
   - job: HpsdForward
-    timeoutInMinutes: 20
+    timeoutInMinutes: 12
     steps:
       - checkout: none
       - bash: |
           set +e
           UID_N=$(id -u); export XDG_RUNTIME_DIR=/run/user/$UID_N
           export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
-          echo "===HPSD FORWARD  $(date -u +%H:%M:%SZ)==="
-          echo "uid=$UID_N  XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR (dir? $(test -d $XDG_RUNTIME_DIR && echo yes || echo NO))"
-          echo "bus? $(test -S $XDG_RUNTIME_DIR/bus && echo yes || echo NO)"
-          echo "linger: $(loginctl show-user $USER -p Linger 2>&1)"
-
-          # --- helper de controle do stack (seleciona so os containers HPSD) ---
+          export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+          echo "===HPSD FORWARD (nuke + staged up)  $(date -u +%H:%M:%SZ)==="
           mkdir -p ~/part2-hpsd/docker ~/.config/systemd/user
+
+          # ---------- hpsd-ctl.sh (nuke + staged up) ----------
           cat > ~/part2-hpsd/docker/hpsd-ctl.sh <<'CTL'
           #!/usr/bin/env bash
-          # controla o stack HPSD via `podman compose` (respeita depends_on → recria forwarders em ordem).
-          # PATH explicito: sob systemd --user o PATH e restrito e o compose provider (podman-compose,
-          # em ~/.local/bin) some. Sem isso, `podman compose` falha 125.
           set +e
           export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
           export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-          DIR=~/part2-hpsd/docker
-          cd "$DIR" || exit 1
-          . ./env.sh rhel 2>/dev/null   # WSLUG p/ extra_hosts do compose
+          DIR=~/part2-hpsd/docker; cd "$DIR" || exit 1
+          . ./env.sh rhel 2>/dev/null
+          sel() { podman ps -a --format '{{.Names}}' | grep -iE 'sddb_vivo|sdsp_vivo|^tools$|^sdui$|sdui-plugin|omuiplugin_vivo|museomui_vivo|muse-(auth|registry|config|notif|shell|gateway)_vivo'; }
           case "$1" in
-            up)       podman compose down --remove-orphans; podman compose up -d ;;  # reset limpo: derruba (preserva volume oradata) e sobe tudo em ordem → forwarders frescos sob o manager
-            start)    podman compose up -d ;;
-            stop)     podman compose stop ;;
-            restart)  podman compose restart ;;
-            list)     podman compose ps --format '{{.Names}}' ;;
-            *)        echo "uso: hpsd-ctl.sh {up|start|stop|restart|list}" ;;
+            nuke)
+              # remove o(s) pod(s) que contem containers HPSD, a forca (volume oradata preservado)
+              for c in $(sel); do
+                pid=$(podman inspect "$c" --format '{{.Pod}}' 2>/dev/null)
+                [ -n "$pid" ] && echo "$pid"
+              done | sort -u | while read -r p; do echo "  pod rm -f $p"; podman pod rm -f "$p" 2>&1; done
+              L=$(sel); [ -n "$L" ] && { echo "  rm -f leftover: $L"; podman rm -f $L 2>&1; }
+              ;;
+            up)
+              echo "[stage1] Oracle (sddb_vivo)"
+              podman compose up -d sddb_vivo 2>&1 | tail -3
+              for i in $(seq 1 42); do
+                podman logs sddb_vivo 2>&1 | grep -q 'DATABASE IS READY TO USE' && { echo "  Oracle READY"; break; }
+                sleep 10
+              done
+              echo "[stage2] sdsp_vivo + mv do crash-loop"
+              podman compose up -d sdsp_vivo 2>&1 | tail -3
+              for i in $(seq 1 15); do
+                if podman ps --format '{{.Names}}' | grep -q '^sdsp_vivo$'; then
+                  podman exec sdsp_vivo mv /docker/scripts/startup/01_wait_for_db.sh / 2>/dev/null \
+                    && { echo "  01_wait_for_db.sh movido (crash-loop neutralizado)"; break; }
+                fi
+                sleep 5
+              done
+              echo "[stage3] resto do stack"
+              podman compose up -d 2>&1 | tail -5
+              ;;
+            stop)  podman compose stop 2>&1 ;;
+            list)  sel ;;
+            *)     echo "uso: hpsd-ctl.sh {nuke|up|stop|list}" ;;
           esac
           CTL
           chmod +x ~/part2-hpsd/docker/hpsd-ctl.sh
-          echo "-- containers que a unit gerencia:"; ~/part2-hpsd/docker/hpsd-ctl.sh list
 
-          # --- user systemd unit (dona do stack; RemainAfterExit mantem o cgroup vivo) ---
+          # ---------- unit ----------
           cat > ~/.config/systemd/user/hpsd.service <<UNIT
           [Unit]
           Description=HPSD stack (podman rootless, forwarders sob o user manager)
@@ -66,32 +82,27 @@ jobs:
           [Install]
           WantedBy=default.target
           UNIT
-          echo "-- unit instalada em ~/.config/systemd/user/hpsd.service"
 
-          # --- tenta acionar via manager persistente ---
-          echo ""
-          echo "-- systemctl --user reachable?"
-          systemctl --user is-system-running 2>&1 | head -1
-          echo "-- daemon-reload + enable:"
+          echo "-- limpa estado da unit:"
+          systemctl --user stop hpsd.service 2>&1
+          systemctl --user reset-failed hpsd.service 2>&1
           systemctl --user daemon-reload 2>&1
-          systemctl --user enable hpsd.service 2>&1
-          echo "-- restart hpsd.service --no-block (manager sobe a cascata em background; forwarders sob ele):"
-          systemctl --user reset-failed hpsd.service 2>/dev/null
-          systemctl --user --no-block restart hpsd.service 2>&1
-          RC=$?
-          echo "   restart(--no-block) rc=$RC — cascata roda ~15-18min sob o manager; monitorar via ready-check"
-          sleep 15
-          echo "-- systemctl --user status hpsd:"
-          systemctl --user status hpsd.service --no-pager 2>&1 | head -8
-          echo "-- journalctl --user hpsd (erro real do ExecStart):"
-          journalctl --user -u hpsd.service -n 30 --no-pager 2>&1 | tail -30
 
           echo ""
-          echo "-- estado dos containers:"
-          podman ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>&1 | head -20
+          echo "-- NUKE do pod HPSD via manager (namespace certo, force):"
+          systemd-run --user --pipe --wait --collect --unit=hpsd-nuke "$HOME/part2-hpsd/docker/hpsd-ctl.sh" nuke 2>&1 | tail -20
+
           echo ""
-          echo "-- curl (pode dar 000 pelo namespace do job; o teste real e o browser do host):"
-          curl -s -o /dev/null -w "   sdsp 8582 => %{http_code}\n" --max-time 6 http://127.0.0.1:8582/
-          curl -s -o /dev/null -w "   muse 8050 => %{http_code}\n" --max-time 6 http://127.0.0.1:8050/muse-shell/
+          echo "-- estado pos-nuke (so part1_* do HPSA devem sobrar):"
+          podman ps -a --format 'table {{.Names}}\t{{.Status}}' 2>&1 | grep -iE 'NAMES|sddb|sdsp|muse|omui|sdui|gateway|^tools' | head -20
+          echo "-- volume oradata:"; podman volume ls 2>&1 | grep -i oradata
+
+          echo ""
+          echo "-- enable + start --no-block (staged up roda ~15min sob o manager):"
+          systemctl --user enable hpsd.service 2>&1
+          systemctl --user --no-block start hpsd.service 2>&1
+          echo "   start rc=$?"
+          sleep 8
+          systemctl --user is-active hpsd.service 2>&1
           echo "===END==="
-        displayName: "HPSD forward via user systemd"
+        displayName: "HPSD nuke + staged up"
