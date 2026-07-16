@@ -1,0 +1,75 @@
+# BoxOps.Inspect2.Ag99Lc — acha a pasta-fonte HPSA (find seguro com -print0),
+# COPIA os 3 arquivos pequenos (docker-compose.yml/install.sql/steps.txt) pro ~/part1
+# (idempotente), imprime o compose HPSA pra commit no repo, e coleta RAM + wslconfig +
+# tail do compose HPSD. Copia e read-only misto, sem tunel/inbound. Sempre verde.
+name: BoxOps.Inspect2.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+variables:
+  BUNDLE_BASE: "/mnt/c/Users/David Vidal Buena/OneDrive - Accenture/Engenharia TLF - HPSD - Transição e Takeover/07 - Treinamento/01 - VIVO"
+  BUNDLE_FALLBACK: "/mnt/c/Users/David Vidal Buena"
+
+jobs:
+  - job: Inspect2
+    timeoutInMinutes: 25
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===LOCALIZAR PASTA-FONTE HPSA (find -print0, sem word-split)==="
+          SRC=""
+          while IFS= read -r -d '' cand; do
+            [ -n "$cand" ] || continue
+            # preferir a que TAMBEM tem docker-compose.yml ao lado
+            d="$(dirname "$cand")"
+            if [ -f "$d/docker-compose.yml" ]; then SRC="$d"; break; fi
+            [ -z "$SRC" ] && SRC="$d"
+          done < <( { find "$(BUNDLE_BASE)" -name "oraclexe.tar" -type f -print0 2>/dev/null; \
+                      find "$(BUNDLE_FALLBACK)" -name "oraclexe.tar" -type f -print0 2>/dev/null; } )
+          echo "SRC=$SRC"
+          echo ""
+          echo "===LISTAGEM DA PASTA-FONTE==="
+          [ -n "$SRC" ] && ls -la "$SRC" 2>&1
+
+          echo ""
+          echo "===COPIAR arquivos pequenos p/ ~/part1 (idempotente)==="
+          mkdir -p ~/part1
+          for f in docker-compose.yml install.sql steps.txt; do
+            if [ -f "$SRC/$f" ]; then
+              cp -f "$SRC/$f" ~/part1/ && echo "  copiado: $f ($(stat -c %s "$SRC/$f") B)" || echo "  FALHA copiar $f"
+            else
+              echo "  AUSENTE na fonte: $f"
+            fi
+          done
+          echo "-- ~/part1 agora:"; ls -la ~/part1 2>&1
+
+          echo ""
+          echo "===HPSA docker-compose.yml (conteudo p/ commit)==="
+          cat ~/part1/docker-compose.yml 2>&1 || echo AUSENTE
+          echo ""
+          echo "===HPSA steps.txt==="
+          cat ~/part1/steps.txt 2>&1 || echo AUSENTE
+
+          echo ""
+          echo "===RAM / CPU==="
+          free -h 2>&1
+          echo "nproc=$(nproc 2>/dev/null)"
+          echo "-- .wslconfig do host:"
+          cat "/mnt/c/Users/David Vidal Buena/.wslconfig" 2>&1 | grep -iE 'memory|processors|swap|networkingMode|mirrored' || echo "(sem .wslconfig ou sem essas chaves)"
+
+          echo ""
+          echo "===HPSD docker-compose.yml — TAIL (omui/sdui/wiremock/ports finais)==="
+          tail -120 ~/part2-hpsd/docker/docker-compose.yml 2>&1
+
+          echo ""
+          echo "===HPSD: outros arquivos (env.sh, Dockerfile, db-startup, training, wiremock)==="
+          ls -la ~/part2-hpsd/docker/ 2>&1
+          echo "-- env.sh (head 40):"; head -40 ~/part2-hpsd/docker/env.sh 2>/dev/null || echo AUSENTE
+          echo "-- up.sh (completo, e pequeno):"; cat ~/part2-hpsd/docker/up.sh 2>/dev/null || echo AUSENTE
+          echo "===END==="
+        displayName: "Inspect2: stage ~/part1 + composes + RAM (read-only-ish)"
