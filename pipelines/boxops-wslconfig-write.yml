@@ -1,0 +1,53 @@
+# BoxOps.WslcfgWrite.Ag99Lc — cria o .wslconfig do host SO com RAM/CPU/swap (sem mexer em
+# rede → sem risco de derrubar o agente). Objetivo: HPSD ganhar RAM. mirrored/VPN fica p/
+# a janela da VPN (wslconfig-vpn-mirrored.txt). Backup se ja existir. Idempotente.
+name: BoxOps.WslcfgWrite.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: WslcfgWrite
+    timeoutInMinutes: 10
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          DIR="/mnt/c/Users/David Vidal Buena"
+          F="$DIR/.wslconfig"
+          echo "===dir existe / writable?==="
+          ls -ld "$DIR" 2>&1
+          # teste de escrita real
+          TESTF="$DIR/.wsltest_$$"
+          if echo ok > "$TESTF" 2>/dev/null; then
+            echo "  ESCRITA OK no dir"; rm -f "$TESTF"
+          else
+            echo "  ❌ NAO consigo escrever no dir (ACL do Windows) — voce faz manual"
+            echo "     Crie C:\\Users\\David Vidal Buena\\.wslconfig com:"
+            printf '     [wsl2]\n     memory=24GB\n     processors=14\n     swap=8GB\n'
+            echo "===END==="; exit 0
+          fi
+
+          echo ""
+          echo "===backup se ja existir==="
+          if [ -f "$F" ]; then cp "$F" "$F.bak_$(date +%s 2>/dev/null || echo prev)" 2>/dev/null && echo "  backup feito"; else echo "  (nao existia)"; fi
+
+          echo ""
+          echo "===escrever .wslconfig (RAM-only, sem indentacao)==="
+          {
+            printf '# .wslconfig - RAM/CPU p/ o devenv HPSD (via box-ops 2026-07-16). Rede NAO alterada\n'
+            printf '# de proposito (mirrored/VPN = wslconfig-vpn-mirrored.txt, janela da VPN).\n'
+            printf '[wsl2]\n'
+            printf 'memory=24GB\n'
+            printf 'processors=14\n'
+            printf 'swap=8GB\n'
+          } > "$F"
+          echo "  exit=$?"
+          echo ""
+          echo "===conteudo final==="
+          cat "$F" 2>&1
+          echo "===END==="
+        displayName: "escrever .wslconfig RAM-only no host"
