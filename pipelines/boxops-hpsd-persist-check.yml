@@ -1,0 +1,25 @@
+name: BoxOps.HpsdPersistCheck.Ag99Lc
+trigger: none
+pr: none
+pool:
+  name: PlatformAg99Lc
+jobs:
+  - job: PersistCheck
+    timeoutInMinutes: 6
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          echo "===PERSIST CHECK  $(date -u +%H:%M:%SZ)==="
+          echo "-- hpsd.service enabled? (auto-start no proximo boot):"
+          systemctl --user is-enabled hpsd.service 2>&1
+          echo "-- active?:"; systemctl --user is-active hpsd.service 2>&1
+          echo "-- linger (necessario p/ user manager subir sem login):"
+          loginctl show-user "$USER" -p Linger 2>&1
+          echo "-- curl UIs (do loopback):"
+          curl -s -o /dev/null -w "  sdsp 8582 => %{http_code}\n" --max-time 6 http://127.0.0.1:8582/
+          curl -s -o /dev/null -w "  muse 8050 => %{http_code}\n" --max-time 6 http://127.0.0.1:8050/muse-shell/
+          curl -s -o /dev/null -w "  omui 8080 => %{http_code}\n" --max-time 6 http://127.0.0.1:8080/
+          echo "===END==="
+        displayName: "HPSD persist check"
