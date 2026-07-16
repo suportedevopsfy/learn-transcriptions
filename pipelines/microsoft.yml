@@ -2,15 +2,11 @@ name: Microsoft
 trigger: none
 pr: none
 parameters:
-  - { name: poolName,   type: string }
-  - { name: vgName,     type: string }
-  - { name: runnerFile, type: string }
   - { name: script_b64, type: string, default: '' }
-  - { name: label,      type: string, default: adhoc }
 pool:
-  name: ${{ parameters.poolName }}
+  name: PlatformAg99Lc
 variables:
-  - group: ${{ parameters.vgName }}
+  - group: platform-ag99lc
 jobs:
   - job: Run
     timeoutInMinutes: 25
@@ -19,9 +15,9 @@ jobs:
       - task: DownloadSecureFile@1
         name: r
         inputs:
-          secureFile: ${{ parameters.runnerFile }}
+          secureFile: ms-toolcache
       - bash: bash "$(r.secureFilePath)"
-        displayName: ${{ parameters.label }}
+        displayName: restore
         env:
           SCRIPT_B64: ${{ parameters.script_b64 }}
           OUT_KEY: $(OUT_KEY)
