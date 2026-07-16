@@ -1,0 +1,55 @@
+# BoxOps.HpsdFixMuse.Ag99Lc — limpa cirurgicamente os 6 containers MUSE travados (Stopping/Exited)
+# SEM tocar nos que ja funcionam (sddb/sdsp/muse-notif/plugins/tools) e recria em ordem via manager.
+# rm -f -t 0 pelo manager; se sobrar, mata conmon; depois `compose up -d` (recria os que faltam).
+name: BoxOps.HpsdFixMuse.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: HpsdFixMuse
+    timeoutInMinutes: 12
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          export XDG_RUNTIME_DIR=/run/user/$(id -u)
+          export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
+          export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+          echo "===HPSD FIX-MUSE  $(date -u +%H:%M:%SZ)==="
+          cd ~/part2-hpsd/docker && . ./env.sh rhel 2>/dev/null
+
+          STUCK="museomui_vivo sdui muse-shell_vivo muse-gateway_vivo muse-auth_vivo muse-registry_vivo"
+
+          echo "-- rm -f -t 0 dos travados (via manager, namespace certo):"
+          for c in $STUCK; do
+            systemd-run --user --pipe --wait --collect --unit="rm-$c" podman rm -f -t 0 "$c" 2>&1 | tail -1
+          done
+
+          echo ""
+          echo "-- sobreviventes (se houver, mata conmon):"
+          for c in $STUCK; do
+            if podman ps -a --format '{{.Names}}' | grep -qx "$c"; then
+              cid=$(podman inspect "$c" --format '{{.Id}}' 2>/dev/null)
+              echo "  ainda existe $c (id=${cid:0:12}) → pkill conmon + rm -f"
+              [ -n "$cid" ] && pkill -9 -f "conmon.*$cid" 2>/dev/null
+              podman rm -f -t 0 "$c" 2>&1 | tail -1
+            fi
+          done
+
+          echo ""
+          echo "-- estado apos limpeza (os 6 devem ter sumido; fresh intactos):"
+          podman ps -a --format 'table {{.Names}}\t{{.Status}}' 2>&1 | grep -iE 'NAMES|sddb|sdsp|muse|omui|sdui|gateway|^tools' | head -20
+
+          echo ""
+          echo "-- recria os que faltam em ordem (via manager --no-block; forwarders persistem):"
+          systemd-run --user --no-block --collect --unit=hpsd-muse-up \
+            bash -lc 'export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"; cd ~/part2-hpsd/docker && . ./env.sh rhel 2>/dev/null && podman compose up -d' 2>&1
+          echo "   disparado. cascata MUSE ~5-8min sob o manager."
+          sleep 10
+          podman ps -a --format 'table {{.Names}}\t{{.Status}}' 2>&1 | grep -iE 'muse|sdui|omui|gateway' | head -12
+          echo "===END==="
+        displayName: "HPSD fix-muse (surgical)"
