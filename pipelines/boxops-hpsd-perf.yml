@@ -1,0 +1,21 @@
+name: BoxOps.HpsdPerf.Ag99Lc
+trigger: none
+pr: none
+pool:
+  name: PlatformAg99Lc
+jobs:
+  - job: HpsdPerf
+    timeoutInMinutes: 8
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===HPSD PERF  $(date -u +%H:%M:%SZ)==="
+          echo "-- CPU/load (14 cores):"; uptime; echo "nproc=$(nproc)"
+          echo "-- RAM:"; free -h | head -2
+          echo "-- disco:"; df -h / /mnt/c 2>/dev/null | grep -vE '^Filesystem.*Mounted' | head -4
+          echo "-- top 8 processos por CPU:"; ps -eo pcpu,pmem,comm --sort=-pcpu | head -9
+          echo "-- podman stats (snapshot, CPU/MEM por container):"
+          timeout 20 podman stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}' 2>&1 | head -18
+          echo "===END==="
+        displayName: "HPSD perf snapshot"
