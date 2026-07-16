@@ -1,0 +1,57 @@
+# BoxOps.Inspect.Ag99Lc — read-only. Localiza a pasta-fonte HPSA (onde estao os tars),
+# confirma os arquivos pequenos (docker-compose.yml/install.sql/steps.txt) e IMPRIME os dois
+# docker-compose.yml (HPSA-fonte + HPSD ~/part2-hpsd/docker) pra revisao/commit no repo.
+# Sem tunel, sem inbound. Sempre verde.
+name: BoxOps.Inspect.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+variables:
+  BUNDLE_BASE: "/mnt/c/Users/David Vidal Buena/OneDrive - Accenture/Engenharia TLF - HPSD - Transição e Takeover/07 - Treinamento/01 - VIVO"
+  BUNDLE_FALLBACK: "/mnt/c/Users/David Vidal Buena"
+
+jobs:
+  - job: Inspect
+    timeoutInMinutes: 20
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===LOCALIZAR PASTA-FONTE HPSA (dir do oraclexe.tar)==="
+          SRC=""
+          for cand in $(find "$(BUNDLE_BASE)" -name "oraclexe.tar" -type f 2>/dev/null; \
+                        find "$(BUNDLE_FALLBACK)" -name "oraclexe.tar" -type f 2>/dev/null); do
+            [ -n "$cand" ] && { SRC="$(dirname "$cand")"; break; }
+          done
+          echo "SRC=$SRC"
+          if [ -n "$SRC" ]; then
+            echo "===ARQUIVOS NA PASTA-FONTE HPSA==="
+            ls -la "$SRC" 2>&1
+            echo ""
+            echo "===HPSA docker-compose.yml (fonte)==="
+            if [ -f "$SRC/docker-compose.yml" ]; then cat "$SRC/docker-compose.yml"; else echo "AUSENTE"; fi
+            echo ""
+            echo "===HPSA steps.txt (fonte)==="
+            if [ -f "$SRC/steps.txt" ]; then cat "$SRC/steps.txt"; else echo "AUSENTE"; fi
+            echo ""
+            echo "===HPSA install.sql (fonte) — head 40==="
+            if [ -f "$SRC/install.sql" ]; then head -40 "$SRC/install.sql"; echo "... (truncado; bytes=$(stat -c %s "$SRC/install.sql"))"; else echo "AUSENTE"; fi
+          fi
+          echo ""
+          echo "===HPSD docker-compose.yml (~/part2-hpsd/docker) — ESTADO ATUAL==="
+          if [ -f ~/part2-hpsd/docker/docker-compose.yml ]; then cat ~/part2-hpsd/docker/docker-compose.yml; else echo "AUSENTE"; fi
+          echo ""
+          echo "===HPSD up.sh + env.sh — head==="
+          echo "-- up.sh"; head -40 ~/part2-hpsd/docker/up.sh 2>/dev/null || echo AUSENTE
+          echo "-- env.sh"; head -30 ~/part2-hpsd/docker/env.sh 2>/dev/null || echo AUSENTE
+          echo ""
+          echo "===HPSD dir listing==="
+          ls -la ~/part2-hpsd/docker/ 2>&1 | head -40
+          echo "===IMAGES atuais==="
+          podman images --format '{{.Repository}}:{{.Tag}}' 2>&1
+          echo "===END==="
+        displayName: "Inspect: composes HPSA-fonte + HPSD (read-only)"
