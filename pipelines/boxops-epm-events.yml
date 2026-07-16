@@ -1,0 +1,61 @@
+# BoxOps.EpmEvents.Ag99Lc — READ-ONLY: le eventos do BeyondTrust/Defender no host e
+# filtra os que mencionam 'barrier', pra descobrir QUAL regra bloqueou (unsigned x HackTool).
+# So leitura de Event Log (Get-WinEvent) via interop. NAO muda nada, NAO roda barrier.
+name: BoxOps.EpmEvents.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: EpmEvents
+    timeoutInMinutes: 10
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          PS="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+          DEST_WSL="/mnt/c/Users/David Vidal Buena/AppData/Local/Temp/epm-events.ps1"
+          DEST_WIN='C:\Users\David Vidal Buena\AppData\Local\Temp\epm-events.ps1'
+          cat > "$DEST_WSL" <<'PSEOF'
+          $ErrorActionPreference='SilentlyContinue'
+          Write-Output '=== logs EPM/Defender presentes (com registros) ==='
+          $epm = Get-WinEvent -ListLog * | Where-Object { $_.LogName -match 'Defendpoint|Privilege|BeyondTrust|Avecto|Defender' -and $_.RecordCount -gt 0 }
+          $epm | Select-Object LogName, RecordCount | Format-Table -AutoSize | Out-String | Write-Output
+
+          $since = (Get-Date).AddHours(-12)
+          $logs = @('Application')
+          $epm | ForEach-Object { $logs += $_.LogName }
+          $logs = $logs | Select-Object -Unique
+
+          Write-Output '=== eventos mencionando "barrier" (ultimas 12h) ==='
+          $hits = @()
+          foreach($lg in $logs){
+            try {
+              $ev = Get-WinEvent -FilterHashtable @{ LogName=$lg; StartTime=$since } -ErrorAction SilentlyContinue
+              foreach($e in $ev){
+                if($e.Message -and ($e.Message -match 'barrier')){
+                  $m = ($e.Message -replace '\s+',' ')
+                  if($m.Length -gt 500){ $m = $m.Substring(0,500) }
+                  $hits += [PSCustomObject]@{ Time=$e.TimeCreated; Log=$lg; Prov=$e.ProviderName; Id=$e.Id; Msg=$m }
+                }
+              }
+            } catch {}
+          }
+          if($hits.Count -eq 0){
+            Write-Output 'nenhum evento com "barrier" nas ultimas 12h nesses logs.'
+            Write-Output '(se voce testou ha mais de 12h, aumentar a janela; ou o EPM loga noutro canal)'
+          } else {
+            $hits | Sort-Object Time -Descending | Select-Object -First 12 | ForEach-Object {
+              Write-Output ('--- ' + $_.Time + ' | ' + $_.Log + ' | ' + $_.Prov + ' | id=' + $_.Id + ' ---')
+              Write-Output $_.Msg
+            }
+          }
+          Write-Output 'FIM-EPM'
+          PSEOF
+          echo "=== invocando leitura de eventos no host ==="
+          "$PS" -NoProfile -ExecutionPolicy Bypass -File "$DEST_WIN" 2>&1 | tr -d '\000\r'
+          echo "=== FIM-JOB ==="
+        displayName: "Le eventos BeyondTrust/Defender p/ barrier (read-only)"
