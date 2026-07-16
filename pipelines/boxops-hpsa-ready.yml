@@ -1,0 +1,58 @@
+# BoxOps.HpsaReady.Ag99Lc — read-only. Checa prontidao do stack HPSA:
+# container status, ready-strings do Oracle (18.4-xe: "DATABASE IS READY TO USE!") e do
+# SA/WildFly ("Started NNNN of MMMM services" / WFLYSRV0025), e curl da UI 8682 (espera 302).
+# Sem tunel. Sempre verde.
+name: BoxOps.HpsaReady.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: HpsaReady
+    timeoutInMinutes: 15
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===HPSA READY CHECK  $(date -u +%H:%M:%SZ)==="
+          echo "-- containers:"
+          podman ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>&1 | grep -iE 'NAMES|sadb|sasp'
+
+          SADB=$(podman ps -a --format '{{.Names}}' | grep -i sadb | head -1)
+          SASP=$(podman ps -a --format '{{.Names}}' | grep -i sasp | head -1)
+          echo ""
+          echo "-- Oracle ($SADB):"
+          if [ -n "$SADB" ]; then
+            if podman logs "$SADB" 2>&1 | grep -qE 'DATABASE IS READY TO USE|Configuration completed successfully'; then
+              echo "  ✓ ORACLE READY"
+            else
+              echo "  ⏳ oracle ainda subindo. Progresso/ultimas linhas:"
+              podman logs "$SADB" 2>&1 | grep -oE '[0-9]+% complete|DBCA|Prepar|Creating|Completing' | tail -3
+              podman logs "$SADB" 2>&1 | tail -6
+            fi
+          fi
+          echo ""
+          echo "-- SA/WildFly ($SASP):"
+          if [ -n "$SASP" ]; then
+            if podman logs "$SASP" 2>&1 | grep -qE 'Started [0-9]+ of [0-9]+ .*services|WFLYSRV0025'; then
+              echo "  ✓ WILDFLY/SA BOOT COMPLETE"
+              podman logs "$SASP" 2>&1 | grep -E 'Started [0-9]+ of [0-9]+|WFLYSRV0025' | tail -2
+            else
+              echo "  ⏳ SA ainda subindo (ou aguardando oracle healthy). ultimas linhas:"
+              podman logs "$SASP" 2>&1 | tail -8
+            fi
+          else
+            echo "  (sasp ainda nao criado — normal enquanto oracle nao esta healthy)"
+          fi
+          echo ""
+          echo "-- curl UI Service Activator (espera 302):"
+          curl -s -o /dev/null -w "  http 8682 => %{http_code}\n" --max-time 8 http://127.0.0.1:8682/ 2>&1
+          echo ""
+          echo "-- healthcheck do sadb (podman inspect):"
+          [ -n "$SADB" ] && podman inspect "$SADB" --format '{{.State.Health.Status}}' 2>&1
+          echo "-- RAM agora:"; free -h 2>&1 | head -2
+          echo "===END READY CHECK==="
+        displayName: "HPSA ready-check (read-only)"
