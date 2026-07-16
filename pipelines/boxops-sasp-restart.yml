@@ -1,0 +1,41 @@
+# BoxOps.SaspRestart.Ag99Lc — tenta destravar o deploy do SA com um 2o boot (podman restart).
+# Container de dev, na nossa box, reversivel (recria via phase3). Observa se o log volta a
+# crescer e se o WildFly progride. Se restart falhar por namespace, reporta (=passo humano).
+name: BoxOps.SaspRestart.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: SaspRestart
+    timeoutInMinutes: 15
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          SASP=$(podman ps -a --format '{{.Names}}' | grep -i sasp | head -1)
+          echo "sasp=$SASP"
+          echo "===log lines ANTES==="; podman logs "$SASP" 2>&1 | wc -l
+
+          echo ""
+          echo "===podman restart (timeout 30s stop)==="
+          timeout 90 podman restart -t 30 "$SASP" 2>&1
+          echo "restart_exit=$?"
+
+          echo ""
+          echo "===status pos-restart==="
+          podman ps -a --format 'table {{.Names}}\t{{.Status}}' 2>&1 | grep -iE 'NAMES|sasp'
+
+          echo "aguardando 90s p/ re-boot iniciar..."; sleep 90
+          echo "===log lines DEPOIS==="; podman logs "$SASP" 2>&1 | wc -l
+          echo "===ultimas 20 linhas pos-restart==="
+          podman logs "$SASP" 2>&1 | tail -20
+          echo ""
+          echo "===markers==="
+          podman logs "$SASP" 2>&1 | grep -aE 'WFLYSRV0025|Started [0-9]+ of [0-9]+|Deployed|ERROR|Exception|ansible' | tail -12
+          echo "===curl 8682==="; curl -s -o /dev/null -w "http=%{http_code}\n" --max-time 8 http://127.0.0.1:8682/ 2>&1
+          echo "===END==="
+        displayName: "sasp restart (2o boot) + observar"
