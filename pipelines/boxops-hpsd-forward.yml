@@ -1,0 +1,90 @@
+# BoxOps.HpsdForward.Ag99Lc — instala um user systemd service dono do stack HPSD e tenta subir os
+# port-forwarders sob o USER MANAGER PERSISTENTE (linger), nao sob o job box-ops (que os mata no cleanup).
+# Se o job alcancar o manager persistente (XDG_RUNTIME_DIR=/run/user/UID) → forwarders sobem zero-touch
+# e sobrevivem a reboot. Se NAO alcancar → a unit fica instalada; David sobe com 1 comando.
+# Idempotente, nao-destrutivo, sempre verde.
+name: BoxOps.HpsdForward.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: HpsdForward
+    timeoutInMinutes: 15
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          UID_N=$(id -u); export XDG_RUNTIME_DIR=/run/user/$UID_N
+          export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
+          echo "===HPSD FORWARD  $(date -u +%H:%M:%SZ)==="
+          echo "uid=$UID_N  XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR (dir? $(test -d $XDG_RUNTIME_DIR && echo yes || echo NO))"
+          echo "bus? $(test -S $XDG_RUNTIME_DIR/bus && echo yes || echo NO)"
+          echo "linger: $(loginctl show-user $USER -p Linger 2>&1)"
+
+          # --- helper de controle do stack (seleciona so os containers HPSD) ---
+          mkdir -p ~/part2-hpsd/docker ~/.config/systemd/user
+          cat > ~/part2-hpsd/docker/hpsd-ctl.sh <<'CTL'
+          #!/usr/bin/env bash
+          # controla so os containers do stack HPSD (exclui part1_* do HPSA)
+          set +e
+          sel() { podman ps -a --format '{{.Names}}' | grep -iE 'sddb_vivo|sdsp_vivo|^tools$|^sdui$|sdui-plugin|omuiplugin_vivo|museomui_vivo|muse-(auth|registry|config|notif|shell|gateway)_vivo'; }
+          C=$(sel | tr '\n' ' ')
+          case "$1" in
+            up)       [ -n "$C" ] && podman restart $C ;;   # restart: recria forwarders (running->fresh, stopped->start)
+            start)    [ -n "$C" ] && podman start $C ;;
+            stop)     [ -n "$C" ] && podman stop -t 30 $C ;;
+            restart)  [ -n "$C" ] && podman restart $C ;;
+            list)     echo "$C" ;;
+            *)        echo "uso: hpsd-ctl.sh {up|start|stop|restart|list}" ;;
+          esac
+          CTL
+          chmod +x ~/part2-hpsd/docker/hpsd-ctl.sh
+          echo "-- containers que a unit gerencia:"; ~/part2-hpsd/docker/hpsd-ctl.sh list
+
+          # --- user systemd unit (dona do stack; RemainAfterExit mantem o cgroup vivo) ---
+          cat > ~/.config/systemd/user/hpsd.service <<UNIT
+          [Unit]
+          Description=HPSD stack (podman rootless, forwarders sob o user manager)
+          After=default.target
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=%h/part2-hpsd/docker/hpsd-ctl.sh up
+          ExecStop=%h/part2-hpsd/docker/hpsd-ctl.sh stop
+          TimeoutStartSec=600
+
+          [Install]
+          WantedBy=default.target
+          UNIT
+          echo "-- unit instalada em ~/.config/systemd/user/hpsd.service"
+
+          # --- tenta acionar via manager persistente ---
+          echo ""
+          echo "-- systemctl --user reachable?"
+          systemctl --user is-system-running 2>&1 | head -1
+          echo "-- daemon-reload + enable:"
+          systemctl --user daemon-reload 2>&1
+          systemctl --user enable hpsd.service 2>&1
+          echo "-- restart hpsd.service (ExecStart=podman restart → forwarders sob o manager persistente):"
+          systemctl --user reset-failed hpsd.service 2>/dev/null
+          systemctl --user restart hpsd.service 2>&1
+          RC=$?
+          echo "   restart rc=$RC"
+          sleep 25
+          echo "-- systemctl --user status hpsd:"
+          systemctl --user status hpsd.service --no-pager 2>&1 | head -12
+
+          echo ""
+          echo "-- estado dos containers:"
+          podman ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>&1 | head -20
+          echo ""
+          echo "-- curl (pode dar 000 pelo namespace do job; o teste real e o browser do host):"
+          curl -s -o /dev/null -w "   sdsp 8582 => %{http_code}\n" --max-time 6 http://127.0.0.1:8582/
+          curl -s -o /dev/null -w "   muse 8050 => %{http_code}\n" --max-time 6 http://127.0.0.1:8050/muse-shell/
+          echo "===END==="
+        displayName: "HPSD forward via user systemd"
