@@ -1,0 +1,41 @@
+# BoxOps.State.Ag99Lc — read-only estado pós-load (build 3813 succeeded).
+# Foco: imagens carregadas, containers, versoes toolchain, dirs do bundle, compose files.
+# Decide se a Fase 3 (compose up) pode rodar. Sem tunel, sem inbound. Sempre verde.
+name: BoxOps.State.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: State
+    timeoutInMinutes: 15
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===ID==="; id -un; hostname
+          echo "===PODMAN_VER==="; podman --version 2>&1; podman info --format 'rootless={{.Host.Security.Rootless}}' 2>&1
+          echo "===IMAGES==="; podman images --format '{{.Repository}}:{{.Tag}}  {{.Size}}' 2>&1
+          echo "===IMAGES_COUNT==="; podman images -q 2>&1 | wc -l
+          echo "===CONTAINERS==="; podman ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}' 2>&1
+          echo "===VOLUMES==="; podman volume ls 2>&1 | head -30
+          echo "===SUBUID==="; grep -E 'adam|'"$(id -un)" /etc/subuid 2>&1
+          echo "===TOOLCHAIN==="
+          echo "-- java (Designer runtime, se houver)"; java -version 2>&1 | head -3
+          echo "-- SDKMAN current"; bash -lc 'source ~/.sdkman/bin/sdkman-init.sh 2>/dev/null; sdk current 2>&1' | head -20
+          echo "-- mvn"; bash -lc 'source ~/.sdkman/bin/sdkman-init.sh 2>/dev/null; mvn -v 2>&1' | head -3
+          echo "-- wiremock jar"; ls -la ~/wiremock*.jar ~/tools/wiremock*.jar 2>/dev/null; find ~ -maxdepth 3 -iname 'wiremock*.jar' 2>/dev/null | head
+          echo "===BUNDLE_DIRS==="
+          echo "-- ~/part1"; ls -la ~/part1 2>&1 | head -30
+          echo "-- ~/part2-hpsd"; ls -la ~/part2-hpsd 2>&1 | head -40
+          echo "===COMPOSE_FILES==="
+          echo "-- procurar docker-compose.yml em ~/part*"; find ~/part1 ~/part2-hpsd -maxdepth 3 -iname 'docker-compose*.y*ml' 2>/dev/null
+          echo "-- procurar up.sh (vendor HPSD)"; find ~/part2-hpsd -maxdepth 4 -iname 'up.sh' 2>/dev/null
+          echo "===DISK==="; df -h / /home 2>&1 | head -5
+          echo "===MEM==="; free -h 2>&1 | head -3; echo "nproc=$(nproc 2>/dev/null)"
+          echo "===LINGER==="; loginctl show-user "$(id -un)" 2>&1 | grep -i linger
+          echo "===END==="
+        displayName: "State: imagens/containers/toolchain/bundle (read-only)"
