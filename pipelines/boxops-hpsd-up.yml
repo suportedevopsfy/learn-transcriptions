@@ -1,0 +1,56 @@
+# BoxOps.HpsdUp.Ag99Lc — sobe o stack HPSD (MUSE v5) via `podman compose up -d`.
+# box-ops CONSEGUE `compose up -d` (cria containers, persistem sob linger do adam — igual HPSA Fase 3).
+# NAO faz o `podman exec sdsp_vivo mv 01_wait_for_db.sh` final (namespace) — isso fica pro David
+# (nao-fatal, re-executavel; so neutraliza crash-loop do sdsp na janela do DBCA ~35min).
+# Sem tunel. Idempotente (compose up -d nao recria o que ja existe).
+name: BoxOps.HpsdUp.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: HpsdUp
+    timeoutInMinutes: 20
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===HPSD UP  $(date -u +%H:%M:%SZ)==="
+          DIR=~/part2-hpsd/docker
+          echo "-- dir: $DIR"
+          ls -la "$DIR"/docker-compose.yml "$DIR"/env.sh 2>&1 | head -5
+          cd "$DIR" || { echo "FATAL: sem $DIR"; exit 0; }
+
+          echo ""
+          echo "-- RAM antes:"; free -h | head -2
+
+          echo ""
+          echo "-- env.sh rhel (WSLUG):"
+          . ./env.sh rhel 2>&1
+          echo "   WSLUG=$WSLUG"
+
+          echo ""
+          echo "-- podman compose config (valida antes):"
+          podman compose config >/dev/null 2>&1 && echo "   config OK" || { echo "   config FALHOU:"; podman compose config 2>&1 | tail -15; }
+
+          echo ""
+          echo "-- podman compose up -d (cria o stack):"
+          podman compose up -d 2>&1 | tail -40
+
+          echo ""
+          echo "-- estado imediato (podman ps -a):"
+          podman ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>&1 | head -30
+
+          echo ""
+          echo "-- contagem rodando:"
+          echo "   running=$(podman ps --format '{{.Names}}' 2>/dev/null | grep -icE 'sddb|sdsp|muse|omui|sdui|gateway|tools')"
+
+          echo ""
+          echo ">>> PROXIMO PASSO SEU (terminal WSL direto, quando quiser nos proximos ~30min):"
+          echo "    podman exec sdsp_vivo mv /docker/scripts/startup/01_wait_for_db.sh /"
+          echo "    (neutraliza crash-loop do sdsp; nao-fatal, re-executavel)"
+          echo "===END==="
+        displayName: "HPSD compose up -d"
