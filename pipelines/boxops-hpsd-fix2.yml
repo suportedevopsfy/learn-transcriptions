@@ -1,0 +1,35 @@
+# BoxOps.HpsdFix2.Ag99Lc — quota a 2a porta sexagesimal do compose HPSD (tools: 1122:22)
+# e re-valida que nao ha mais portas N:M com M<60 sem aspas. File edit, sem lifecycle.
+name: BoxOps.HpsdFix2.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: HpsdFix2
+    timeoutInMinutes: 10
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          cd ~/part2-hpsd/docker || exit 0
+          echo "===fix 1122:22 -> '1122:22' (quotar)==="
+          if grep -qE "^\s*-\s*1122:22\s*$" docker-compose.yml; then
+            sed -i "s|- 1122:22|- '1122:22'|" docker-compose.yml && echo "  aplicado"
+          else
+            echo "  ja quotado ou ausente"
+          fi
+          echo ""
+          echo "===re-check TODAS portas N:M com M<60 sem aspas==="
+          grep -nE "^\s*-\s*[0-9]+:([0-9]|[1-5][0-9])\s*$" docker-compose.yml && echo "  ^ AINDA HA portas sem aspas" || echo "  OK: nenhuma porta <60 sem aspas"
+          echo ""
+          echo "===validar parse==="
+          podman compose -f docker-compose.yml config >/dev/null 2>&1 && echo "  config OK" || echo "  config FALHOU"
+          echo ""
+          echo "===ports relevantes (grep)==="
+          grep -nE "21022:22|1122:22" docker-compose.yml
+          echo "===END==="
+        displayName: "HPSD fix2 (quotar 1122:22 + recheck)"
