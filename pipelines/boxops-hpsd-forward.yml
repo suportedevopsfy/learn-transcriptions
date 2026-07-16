@@ -30,12 +30,16 @@ jobs:
           cat > ~/part2-hpsd/docker/hpsd-ctl.sh <<'CTL'
           #!/usr/bin/env bash
           # controla o stack HPSD via `podman compose` (respeita depends_on → recria forwarders em ordem).
+          # PATH explicito: sob systemd --user o PATH e restrito e o compose provider (podman-compose,
+          # em ~/.local/bin) some. Sem isso, `podman compose` falha 125.
           set +e
+          export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
           DIR=~/part2-hpsd/docker
           cd "$DIR" || exit 1
           . ./env.sh rhel 2>/dev/null   # WSLUG p/ extra_hosts do compose
           case "$1" in
-            up)       podman compose up -d; sleep 3; podman compose restart ;;  # cura (start em ordem) + recria forwarders em ordem
+            up)       podman compose restart ;;  # reinicia todos em ordem (depends_on) → forwarders frescos
             start)    podman compose up -d ;;
             stop)     podman compose stop ;;
             restart)  podman compose restart ;;
@@ -78,7 +82,9 @@ jobs:
           echo "   restart rc=$RC"
           sleep 25
           echo "-- systemctl --user status hpsd:"
-          systemctl --user status hpsd.service --no-pager 2>&1 | head -12
+          systemctl --user status hpsd.service --no-pager 2>&1 | head -8
+          echo "-- journalctl --user hpsd (erro real do ExecStart):"
+          journalctl --user -u hpsd.service -n 30 --no-pager 2>&1 | tail -30
 
           echo ""
           echo "-- estado dos containers:"
