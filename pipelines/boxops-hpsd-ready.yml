@@ -1,0 +1,48 @@
+# BoxOps.HpsdReady.Ag99Lc — read-only. Prontidao do stack HPSD (MUSE v5). Cross-namespace ok
+# (logs/ps/curl). Oracle 19.3 ready-string, sdsp WildFly, e curl das UIs (sdsp 8582, muse 8050).
+# So rodar DEPOIS do ./up-podman.sh (terminal direto do David). Sem tunel. Sempre verde.
+name: BoxOps.HpsdReady.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: HpsdReady
+    timeoutInMinutes: 15
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===HPSD READY  $(date -u +%H:%M:%SZ)==="
+          echo "-- containers do stack:"
+          podman ps -a --format 'table {{.Names}}\t{{.Status}}' 2>&1 | grep -iE 'NAMES|sddb|sdsp|muse|omui|om-ui|sdui|sd-ui|tools|gateway' | head -30
+          echo ""
+          echo "-- contagem: rodando vs total esperado (~14):"
+          echo "   running=$(podman ps --format '{{.Names}}' 2>/dev/null | grep -icE 'sddb|sdsp|muse|omui|sdui|gateway|tools')"
+
+          SDDB=$(podman ps -a --format '{{.Names}}' | grep -i sddb | head -1)
+          SDSP=$(podman ps -a --format '{{.Names}}' | grep -i '^sdsp' | head -1)
+          echo ""
+          echo "-- Oracle 19.3 ($SDDB):"
+          if [ -n "$SDDB" ]; then
+            podman inspect "$SDDB" --format '   status={{.State.Status}} health={{.State.Health.Status}}' 2>&1
+            if podman logs "$SDDB" 2>&1 | grep -qE 'DATABASE IS READY TO USE'; then echo "   ✓ ORACLE READY"; else
+              echo "   ⏳ DBCA:"; podman logs "$SDDB" 2>&1 | grep -oE '[0-9]+% complete|ORCLCDB|Completed:' | tail -3; fi
+          fi
+          echo ""
+          echo "-- sdsp/WildFly ($SDSP):"
+          if [ -n "$SDSP" ]; then
+            if podman logs "$SDSP" 2>&1 | grep -qE 'Started [0-9]+ of [0-9]+|WFLYSRV0025'; then echo "   ✓ SDSP WildFly UP"; else
+              echo "   ⏳ ultimas linhas:"; podman logs "$SDSP" 2>&1 | tail -6; fi
+          fi
+          echo ""
+          echo "-- curl UIs:"
+          curl -s -o /dev/null -w "   sdsp 8582 => %{http_code}\n" --max-time 6 http://127.0.0.1:8582/ 2>&1
+          curl -s -o /dev/null -w "   muse 8050 => %{http_code}\n" --max-time 6 http://127.0.0.1:8050/muse-shell/ 2>&1
+          echo ""
+          echo "-- RAM:"; free -h 2>&1 | head -2
+          echo "===END==="
+        displayName: "HPSD ready-check (read-only)"
