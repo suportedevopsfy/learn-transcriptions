@@ -1,0 +1,45 @@
+# BoxOps.Phase4X11.Ag99Lc — prepara a box p/ o Designer do HPSA rodar via WSLg.
+# Instala libs X11 + utils (dnf, local, benigno) e confere DISPLAY/xdpyinfo. NAO lanca o
+# Designer (GUI interativa = passo humano). Sem tunel/inbound. sudo NOPASSWD (senha adam=adam).
+name: BoxOps.Phase4X11.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: Phase4X11
+    timeoutInMinutes: 20
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          echo "===PHASE 4 (box side): X11 p/ WSLg Designer==="
+          echo "-- sudo nao-interativo?"; sudo -n true 2>&1 && echo "  sudo OK" || echo "  sudo pediria senha"
+
+          echo ""
+          echo "===instalar libs X11 + utils (idempotente)==="
+          sudo -n dnf install -y libX11 libXrender libXtst libXi xauth dejavu-sans-fonts xorg-x11-utils 2>&1 | tail -15
+          echo "dnf exit=${PIPESTATUS[0]}"
+
+          echo ""
+          echo "===WSLg ativo?==="
+          echo "DISPLAY=$DISPLAY"
+          echo "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+          echo "-- /tmp/.X11-unix:"; ls -la /tmp/.X11-unix 2>&1 | head
+          echo "-- /mnt/wslg:"; ls -la /mnt/wslg 2>&1 | head
+          echo "-- xdpyinfo (primeiras linhas; so funciona se um X server responde):"
+          DISPLAY="${DISPLAY:-:0}" xdpyinfo 2>&1 | head -5
+
+          echo ""
+          echo "===Designer dentro do sasp — presenca do binario (se container up)==="
+          SASP=$(podman ps -a --format '{{.Names}}' | grep -i sasp | head -1)
+          echo "sasp container: ${SASP:-<nenhum>}"
+          if [ -n "$SASP" ]; then
+            podman exec "$SASP" bash -lc 'ls -la /opt/OV/ServiceActivator/bin/designer 2>&1; java -version 2>&1 | head -2' 2>&1 | head
+          fi
+          echo "===END PHASE4 X11==="
+        displayName: "Fase 4 (box): libs X11 + check WSLg (nao lanca Designer)"
