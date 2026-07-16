@@ -1,0 +1,33 @@
+# BoxOps.HpsdClean.Ag99Lc — para o hpsd.service travado + compose down (preserva volume oradata).
+# Deixa a box num estado PARADO LIMPO p/ o David rodar ./up-podman.sh (sequencia do vendor c/ o mv).
+name: BoxOps.HpsdClean.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: HpsdClean
+    timeoutInMinutes: 10
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+          echo "===HPSD CLEAN  $(date -u +%H:%M:%SZ)==="
+          echo "-- para e desabilita hpsd.service (nao briga com o run manual do David):"
+          systemctl --user stop hpsd.service 2>&1
+          systemctl --user disable hpsd.service 2>&1
+          systemctl --user reset-failed hpsd.service 2>&1
+          echo "-- compose down (preserva volume oradata):"
+          cd ~/part2-hpsd/docker && . ./env.sh rhel 2>/dev/null
+          podman compose down --remove-orphans 2>&1 | tail -20
+          echo ""
+          echo "-- estado (deve estar tudo removido/parado; volume preservado):"
+          podman ps -a --format 'table {{.Names}}\t{{.Status}}' 2>&1 | grep -iE 'NAMES|sddb|sdsp|muse|omui|sdui|gateway|tools' | head -20
+          echo "-- volume oradata preservado?"; podman volume ls 2>&1 | grep -i oradata
+          echo "===END==="
+        displayName: "HPSD clean (stop+down)"
