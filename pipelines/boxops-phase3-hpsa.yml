@@ -1,0 +1,94 @@
+# BoxOps.Phase3Hpsa.Ag99Lc — sobe SÓ o stack HPSA (part1). Cabe em 15GB RAM.
+# Segue steps.txt do vendor: load+TAG oracle-xe (load nao taggeia!), mkdir logs, fix porta
+# rootless (1022->11022), remove mount de ISO ausente, compose up -d, status inicial, EXIT.
+# A prontidao (Oracle DBCA ~15-40min, SA/WildFly boot) e monitorada por probes DEPOIS,
+# pra nao travar o agente. Local-only, sem tunel. Sempre verde (set +e).
+name: BoxOps.Phase3Hpsa.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: Phase3Hpsa
+    timeoutInMinutes: 30
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          cd ~/part1 || { echo "SEM ~/part1"; exit 0; }
+          echo "===PHASE 3 HPSA — bring-up (part1)==="
+          echo "-- arquivos:"; ls -la
+
+          echo ""
+          echo "===1) Oracle-xe: load + TAG (steps.txt: load NAO taggeia)==="
+          if podman image exists oracle/database:18.4.0-xe; then
+            echo "  ja existe oracle/database:18.4.0-xe — pulando load"
+          else
+            echo "  podman load -i oraclexe.tar ..."
+            LOADED=$(podman load -i ~/part1/oraclexe.tar 2>&1); echo "$LOADED" | tail -3
+            if podman image exists oracle/database:18.4.0-xe; then
+              echo "  veio taggeado direto"
+            else
+              REF=$(echo "$LOADED" | sed -n 's/.*Loaded image[s]*: *//p' | tail -1 | tr -d ' ')
+              ID=$(echo "$REF" | sed 's/^sha256://')
+              if [ -z "$ID" ] || ! podman image exists "$ID" 2>/dev/null; then
+                # fallback: imagem <none> mais recente
+                ID=$(podman images --format '{{.ID}} {{.Repository}}' | awk '$2=="<none>"{print $1; exit}')
+              fi
+              if [ -n "$ID" ]; then
+                podman tag "$ID" oracle/database:18.4.0-xe && echo "  TAG ok: $ID -> oracle/database:18.4.0-xe"
+              else
+                echo "  !! nao consegui identificar image id do oracle-xe"
+              fi
+            fi
+          fi
+
+          echo ""
+          echo "===2) SA workshop: garantir vivo-sa-workshop:1.2==="
+          if podman image exists vivo-sa-workshop:1.2; then
+            echo "  ja existe vivo-sa-workshop:1.2"
+          else
+            echo "  podman load -i sa1_2.tar ..."
+            podman load -i ~/part1/sa1_2.tar 2>&1 | tail -3
+          fi
+
+          echo ""
+          echo "===3) dirs de log (steps.txt)==="
+          mkdir -p ~/part1/logs/sp/activator ~/part1/logs/sp/wildfly && echo "  ok logs/sp/{activator,wildfly}"
+
+          echo ""
+          echo "===4) fix porta rootless 1022:1022 -> 11022:1022==="
+          sed -i 's/1022:1022/11022:1022/' docker-compose.yml && echo "  ok"
+
+          echo ""
+          echo "===5) ISO ausente: remover mount se o arquivo nao existe==="
+          if ls ~/part1/Rocky*.iso >/dev/null 2>&1; then
+            echo "  ISO presente — mantendo mount"
+          else
+            sed -i '/Rocky-8.10-x86_64-minimal.iso/d' docker-compose.yml && echo "  ISO ausente — linha de mount removida"
+          fi
+
+          echo ""
+          echo "===6) validar compose==="
+          podman compose -f docker-compose.yml config >/tmp/cfg.out 2>&1
+          echo "  config exit=$?  (head)"; head -5 /tmp/cfg.out
+
+          echo ""
+          echo "===7) compose up -d==="
+          podman compose -f docker-compose.yml up -d 2>&1 | tail -15
+
+          echo ""
+          echo "===8) status inicial (aguardando 60s p/ containers aparecerem)==="
+          sleep 60
+          podman ps -a --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+          echo ""
+          echo "-- primeiras linhas do log do Oracle (sadb):"
+          SADB=$(podman ps -a --format '{{.Names}}' | grep -i sadb | head -1)
+          echo "  container: $SADB"
+          [ -n "$SADB" ] && podman logs "$SADB" 2>&1 | tail -15
+          echo ""
+          echo "===END PHASE3 HPSA (bring-up disparado; prontidao via probe)==="
+        displayName: "Fase 3 HPSA: load+tag+prep+up -d (exit rapido)"
