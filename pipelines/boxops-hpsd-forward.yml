@@ -61,7 +61,7 @@ jobs:
           RemainAfterExit=yes
           ExecStart=%h/part2-hpsd/docker/hpsd-ctl.sh up
           ExecStop=%h/part2-hpsd/docker/hpsd-ctl.sh stop
-          TimeoutStartSec=600
+          TimeoutStartSec=1800
 
           [Install]
           WantedBy=default.target
@@ -75,12 +75,12 @@ jobs:
           echo "-- daemon-reload + enable:"
           systemctl --user daemon-reload 2>&1
           systemctl --user enable hpsd.service 2>&1
-          echo "-- restart hpsd.service (ExecStart=podman restart → forwarders sob o manager persistente):"
+          echo "-- restart hpsd.service --no-block (manager sobe a cascata em background; forwarders sob ele):"
           systemctl --user reset-failed hpsd.service 2>/dev/null
-          systemctl --user restart hpsd.service 2>&1
+          systemctl --user --no-block restart hpsd.service 2>&1
           RC=$?
-          echo "   restart rc=$RC"
-          sleep 25
+          echo "   restart(--no-block) rc=$RC — cascata roda ~15-18min sob o manager; monitorar via ready-check"
+          sleep 15
           echo "-- systemctl --user status hpsd:"
           systemctl --user status hpsd.service --no-pager 2>&1 | head -8
           echo "-- journalctl --user hpsd (erro real do ExecStart):"
