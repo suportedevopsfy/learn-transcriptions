@@ -1,0 +1,25 @@
+# BoxOps.WslcfgRead.Ag99Lc — read-only. Le o .wslconfig atual do host (tem mirrored/VPN
+# que NAO pode ser quebrado) pra planejar o merge de memory=/swap=. Sem tunel.
+name: BoxOps.WslcfgRead.Ag99Lc
+
+trigger: none
+pr: none
+
+pool:
+  name: PlatformAg99Lc
+
+jobs:
+  - job: WslcfgRead
+    timeoutInMinutes: 10
+    steps:
+      - checkout: none
+      - bash: |
+          set +e
+          F="/mnt/c/Users/David Vidal Buena/.wslconfig"
+          echo "===existe?==="; ls -la "$F" 2>&1
+          echo "-- adam pode escrever?"; [ -w "$F" ] && echo "  WRITABLE" || echo "  NAO writable (ou nao existe)"
+          echo ""
+          echo "===conteudo atual==="
+          cat "$F" 2>&1
+          echo "===END==="
+        displayName: "ler .wslconfig (read-only)"
