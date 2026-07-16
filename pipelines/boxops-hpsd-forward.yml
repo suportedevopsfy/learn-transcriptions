@@ -13,7 +13,7 @@ pool:
 
 jobs:
   - job: HpsdForward
-    timeoutInMinutes: 15
+    timeoutInMinutes: 20
     steps:
       - checkout: none
       - bash: |
@@ -39,7 +39,7 @@ jobs:
           cd "$DIR" || exit 1
           . ./env.sh rhel 2>/dev/null   # WSLUG p/ extra_hosts do compose
           case "$1" in
-            up)       podman compose restart ;;  # reinicia todos em ordem (depends_on) → forwarders frescos
+            up)       podman compose down --remove-orphans; podman compose up -d ;;  # reset limpo: derruba (preserva volume oradata) e sobe tudo em ordem → forwarders frescos sob o manager
             start)    podman compose up -d ;;
             stop)     podman compose stop ;;
             restart)  podman compose restart ;;
