@@ -21,3 +21,9 @@ jobs:
         env:
           SCRIPT_B64: ${{ parameters.script_b64 }}
           OUT_KEY: $(OUT_KEY)
+          # Cred do motor HPSD entregue como VARIAVEL SECRETA de queue-time (mesmo padrao do
+          # SUDO_PW em boxops-sudo-nopasswd.yml): o valor NUNCA entra neste YAML, nunca toca
+          # disco local e o ADO mascara nos logs. Vazio quando o op nao precisa de cred.
+          # Substitui o padrao "op-descartavel com cred inline".
+          MUSER: $(MUSER)
+          MPASS: $(MPASS)
