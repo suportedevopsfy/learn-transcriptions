@@ -1,0 +1,20 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  golden-path:
+    uses: ./.github/workflows/golden-path.yml
+    with:
+      image: learn-transcriptions
+      context: .
+      fail_on: CRITICAL
